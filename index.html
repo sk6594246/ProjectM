@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Stratega PM</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/supabase-js/2.39.0/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root{
     --glass-bg: rgba(255,255,255,0.55);
@@ -291,9 +291,24 @@
 const SUPABASE_URL = "https://mjdhvwykoanuvcxfzext.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_WlU80fWZU8rEDKlewo5FyQ_vIZh74bq";
 
-const supabaseClient = window.supabase
-  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-  : null;
+const supabaseLibLoaded = typeof window.supabase !== "undefined" && typeof window.supabase.createClient === "function";
+const placeholdersReplaced = !SUPABASE_URL.includes("YOUR-PROJECT") && !SUPABASE_ANON_KEY.includes("YOUR-ANON-KEY");
+
+let supabaseClient = null;
+let supabaseInitError = "";
+
+if (!supabaseLibLoaded) {
+  supabaseInitError = "The Supabase library didn't load (check network/ad-blocker, or your internet connection).";
+} else if (!placeholdersReplaced) {
+  supabaseInitError = "Replace SUPABASE_URL and SUPABASE_ANON_KEY at the top of the script with your real project values.";
+} else {
+  try {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } catch (e) {
+    supabaseInitError = "Supabase client failed to initialize: " + e.message;
+  }
+}
+if (supabaseInitError) console.warn(supabaseInitError);
 
 /* ============================================================
    LOCAL STATE + CACHE (fallback only — Supabase is source of truth)
@@ -399,7 +414,7 @@ async function handleLogin(){
   errEl.textContent = "";
 
   if (!supabaseClient){
-    errEl.textContent = "Supabase is not configured yet.";
+    errEl.textContent = supabaseInitError || "Supabase is not configured yet.";
     return;
   }
   if (!typedName){
@@ -871,6 +886,7 @@ function renderMobile(){
    BOOTSTRAP
    ============================================================ */
 (async function init(){
+  if (supabaseInitError) document.getElementById("login-error").textContent = supabaseInitError;
   loadCache();
   if (state.users.length) populateLoginDropdown(); // show cached users immediately
   await fetchAllReferenceData();
