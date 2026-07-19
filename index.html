@@ -159,7 +159,8 @@
   <div class="card glass">
     <h1>Stratega <span>PM</span></h1>
     <p>Enter your name and PIN to continue</p>
-    <select id="login-user"></select>
+    <input id="login-name" type="text" placeholder="Your name" list="login-user-list" autocomplete="off" />
+    <datalist id="login-user-list"></datalist>
     <input id="login-pin" type="password" maxlength="4" placeholder="• • • •" />
     <button class="primary" onclick="handleLogin()">Sign in</button>
     <div id="login-error"></div>
@@ -356,35 +357,43 @@ function evaluateAutomationRules(updatedTask, rules){
    AUTH — custom PIN-based (not Supabase Auth)
    ============================================================ */
 async function fetchAllReferenceData(){
-  if (!supabaseClient) return;
-  const [u, d, p, s, pr, t, c, ar] = await Promise.all([
-    supabaseClient.from("users").select("*"),
-    supabaseClient.from("departments").select("*"),
-    supabaseClient.from("projects").select("*"),
-    supabaseClient.from("statuses").select("*").order("sort_order"),
-    supabaseClient.from("priorities").select("*").order("sort_order"),
-    supabaseClient.from("tasks").select("*"),
-    supabaseClient.from("task_comments").select("*"),
-    supabaseClient.from("automation_rules").select("*"),
-  ]);
-  state.users = u.data || [];
-  state.departments = d.data || [];
-  state.projects = p.data || [];
-  state.statuses = s.data || [];
-  state.priorities = pr.data || [];
-  state.tasks = t.data || [];
-  state.comments = c.data || [];
-  state.automationRules = ar.data || [];
-  saveCache();
+  if (!supabaseClient){
+    console.warn("Supabase client not configured — check SUPABASE_URL / SUPABASE_ANON_KEY.");
+    return;
+  }
+  try {
+    const [u, d, p, s, pr, t, c, ar] = await Promise.all([
+      supabaseClient.from("users").select("*"),
+      supabaseClient.from("departments").select("*"),
+      supabaseClient.from("projects").select("*"),
+      supabaseClient.from("statuses").select("*").order("sort_order"),
+      supabaseClient.from("priorities").select("*").order("sort_order"),
+      supabaseClient.from("tasks").select("*"),
+      supabaseClient.from("task_comments").select("*"),
+      supabaseClient.from("automation_rules").select("*"),
+    ]);
+    [u, d, p, s, pr, t, c, ar].forEach(res => { if (res.error) console.error("Fetch error:", res.error); });
+    state.users = u.data || state.users;
+    state.departments = d.data || state.departments;
+    state.projects = p.data || state.projects;
+    state.statuses = s.data || state.statuses;
+    state.priorities = pr.data || state.priorities;
+    state.tasks = t.data || state.tasks;
+    state.comments = c.data || state.comments;
+    state.automationRules = ar.data || state.automationRules;
+    saveCache();
+  } catch(e){
+    console.error("fetchAllReferenceData failed, falling back to cached data:", e);
+  }
 }
 
 function populateLoginDropdown(){
-  const sel = document.getElementById("login-user");
-  sel.innerHTML = state.users.map(u => `<option value="${u.id}">${u.name} (${u.role})</option>`).join("");
+  const list = document.getElementById("login-user-list");
+  list.innerHTML = state.users.map(u => `<option value="${u.name}">${u.role}</option>`).join("");
 }
 
 async function handleLogin(){
-  const userId = Number(document.getElementById("login-user").value);
+  const typedName = document.getElementById("login-name").value.trim();
   const pin = document.getElementById("login-pin").value;
   const errEl = document.getElementById("login-error");
   errEl.textContent = "";
@@ -393,6 +402,16 @@ async function handleLogin(){
     errEl.textContent = "Supabase is not configured yet.";
     return;
   }
+  if (!typedName){
+    errEl.textContent = "Enter your name.";
+    return;
+  }
+  const matchedUser = state.users.find(u => u.name.toLowerCase() === typedName.toLowerCase());
+  if (!matchedUser){
+    errEl.textContent = "No user found with that name.";
+    return;
+  }
+  const userId = matchedUser.id;
   try {
     const { data, error } = await supabaseClient.rpc("verify_user_pin", {
       target_user_id: userId,
@@ -418,6 +437,7 @@ function logout(){
   document.getElementById("app").style.display = "none";
   document.getElementById("login-screen").style.display = "flex";
   document.getElementById("login-pin").value = "";
+  document.getElementById("login-name").value = "";
 }
 
 function enterApp(){
