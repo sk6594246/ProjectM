@@ -80,8 +80,13 @@
   .kanban-col h3{ margin:0 0 10px; font-size:14px; display:flex; justify-content:space-between; }
   .kanban-col h3 .count{ background:rgba(0,0,0,0.06); border-radius:20px; padding:1px 8px; font-size:12px; }
   .task-card{
-    background:#fff; border-radius:12px; padding:10px 12px; margin-bottom:10px;
-    box-shadow:0 2px 8px rgba(0,0,0,0.06); cursor:grab; border-left:4px solid var(--accent);
+    background:#fff; border-radius:12px; padding:12px 12px 10px; margin-bottom:10px;
+    box-shadow:0 2px 8px rgba(0,0,0,0.06); cursor:grab; position:relative;
+    border-left:4px solid var(--accent); overflow:hidden;
+  }
+  .task-card::before{
+    content:""; position:absolute; left:0; right:0; top:0; height:4px;
+    background: var(--status-accent, var(--accent));
   }
   .task-card.priority-High{ border-left-color: var(--danger); }
   .task-card.priority-Medium{ border-left-color: var(--warn); }
@@ -129,9 +134,14 @@
 
   /* Gantt */
   .gantt-wrap{ padding:18px; overflow-x:auto; }
+  .gantt-wrap.compressed{ overflow-x:hidden; }
   .gantt-row{ display:flex; align-items:center; margin-bottom:10px; font-size:12px; }
   .gantt-label{ width:180px; flex-shrink:0; padding-right:10px; }
   .gantt-track{ position:relative; flex:1; height:38px; background:rgba(0,0,0,0.04); border-radius:6px; min-width:400px; }
+  .gantt-wrap.compressed .gantt-track{ min-width:0; }
+  .gantt-wrap.compressed #gantt-grid-wrap{ max-width:1600px; margin:0 auto; }
+  .gantt-wrap.compressed #gantt-rows.two-col{ column-count:2; column-gap:24px; }
+  .gantt-wrap.compressed #gantt-rows.two-col .gantt-row{ break-inside:avoid; -webkit-column-break-inside:avoid; }
   .bar{ position:absolute; height:10px; border-radius:5px; top:0; }
   .bar.planned{ background: var(--accent-soft); top:2px; }
   .bar.actual{ background: var(--ok); top:14px; }
@@ -156,6 +166,29 @@
 
   .panel{ padding:18px; margin-bottom:14px; }
   .panel h3{ margin-top:0; }
+
+  .icon-btn{ background:none; border:1px solid rgba(0,0,0,0.12); border-radius:7px; padding:4px 9px; font-size:11px; cursor:pointer; margin-right:4px; }
+  .icon-btn:hover{ background:rgba(0,0,0,0.06); }
+  .icon-btn.danger{ color:var(--danger); border-color:rgba(217,83,79,0.35); }
+  .icon-btn.danger:hover{ background:rgba(217,83,79,0.1); }
+
+  .status-row{ display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid rgba(0,0,0,0.06); }
+  .status-row .status-name{ flex:1; font-size:13px; font-weight:600; }
+  .status-row .status-count{ font-size:11px; color:var(--ink-soft); }
+  .status-swatch{ width:20px; height:20px; border-radius:6px; border:1px solid rgba(0,0,0,0.15); padding:0; cursor:pointer; }
+  .status-row .sort-btns{ display:flex; flex-direction:column; gap:2px; }
+  .status-row .sort-btns button{ background:none; border:none; cursor:pointer; font-size:10px; line-height:1; color:var(--ink-soft); padding:2px; }
+  .status-row .sort-btns button:hover{ color:var(--accent); }
+
+  .audit-filters{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  .audit-filters select{ padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px; }
+  table.audit-table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  table.audit-table th, table.audit-table td{ text-align:left; padding:8px 10px; border-bottom:1px solid rgba(0,0,0,0.06); vertical-align:top; }
+  .audit-diff-line{ margin:2px 0; }
+  .audit-diff-line .field{ font-weight:600; color:var(--ink-soft); }
+  .audit-diff-line .old-val{ color:var(--danger); text-decoration:line-through; }
+  .audit-diff-line .new-val{ color:var(--ok); }
+  .audit-action-pill{ font-size:10px; padding:2px 7px; border-radius:10px; background:rgba(61,108,255,0.12); color:var(--accent); font-weight:600; }
 
   @media (max-width: 640px){
     .kanban{ grid-template-columns: 1fr; }
@@ -188,6 +221,7 @@
       <button data-view="analytics">Analytics</button>
       <button data-view="directory">Team</button>
       <button data-view="mobile">Overview</button>
+      <button data-view="audit">Audit Trail</button>
       <button data-view="manage" id="tab-manage" style="display:none;">Manage</button>
     </nav>
     <div class="who">
@@ -268,6 +302,21 @@
       <div class="grid-3" id="mobile-cards"></div>
     </section>
 
+    <!-- AUDIT TRAIL -->
+    <section class="view" id="view-audit">
+      <div class="panel glass">
+        <h3>Audit trail</h3>
+        <div class="audit-filters">
+          <select id="audit-filter-user"><option value="all">All users</option></select>
+          <select id="audit-filter-task"><option value="all">All tasks</option></select>
+        </div>
+        <table class="audit-table" id="audit-table">
+          <tr><th>When</th><th>Task</th><th>Action</th><th>Changed by</th><th>What changed</th></tr>
+        </table>
+        <div id="audit-empty" style="color:var(--ink-soft); font-size:12px; margin-top:10px; display:none;">No audit entries match these filters.</div>
+      </div>
+    </section>
+
     <!-- MANAGE (Admin / Manager only) -->
     <section class="view" id="view-manage">
       <div class="panel glass" id="manage-add-project-panel">
@@ -310,6 +359,16 @@
           <div></div>
         </div>
         <button class="primary" style="width:auto; margin-top:10px;" onclick="addUser()">Add team member</button>
+      </div>
+
+      <div class="panel glass">
+        <h3>Manage statuses</h3>
+        <div id="status-list"></div>
+        <div class="row2" style="margin-top:14px;">
+          <div><label>New status name</label><input id="new-status-name" /></div>
+          <div><label>Color</label><input type="color" id="new-status-color" value="#3d6cff" style="height:38px; padding:2px;" /></div>
+        </div>
+        <button class="primary" style="width:auto; margin-top:10px;" onclick="addStatus()">Add status</button>
       </div>
     </section>
   </main>
@@ -366,6 +425,28 @@
       <div style="flex:1"></div>
       <button class="btn-cancel" onclick="closeTaskModal()">Cancel</button>
       <button class="btn-save" onclick="saveTask()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== USER EDIT MODAL ===================== -->
+<div class="modal-backdrop" id="user-modal-backdrop">
+  <div class="modal glass" style="width:380px;">
+    <h2>Edit team member</h2>
+    <input type="hidden" id="edit-user-id" />
+    <label>Name</label>
+    <input id="edit-user-name" />
+    <label>Role</label>
+    <select id="edit-user-role">
+      <option>User</option><option>Manager</option><option>Admin</option>
+    </select>
+    <label>Reset PIN (leave blank to keep current)</label>
+    <input id="edit-user-pin" maxlength="4" placeholder="New 4-digit PIN" />
+    <div class="modal-actions">
+      <button class="btn-delete" onclick="deleteUser()">Delete user</button>
+      <div style="flex:1"></div>
+      <button class="btn-cancel" onclick="closeUserModal()">Cancel</button>
+      <button class="btn-save" onclick="saveUserEdit()">Save</button>
     </div>
   </div>
 </div>
@@ -580,6 +661,15 @@ function canEditTask(task){
   const depts = myDepartmentIds();
   return depts.includes(task.department_id);
 }
+function canCreateTaskInDepartment(departmentId){
+  const u = state.currentUser;
+  if (!u) return false;
+  if (u.role === "Admin") return true;
+  const depts = myDepartmentIds();
+  if (u.role === "Manager") return depts.length === 0 ? true : depts.includes(departmentId);
+  // regular User: can only create tasks in their own department(s)
+  return depts.includes(Number(departmentId));
+}
 
 function visibleTasks(){
   if (isManagerOrAdmin() && state.currentProjectFilter === "all") return state.tasks;
@@ -623,6 +713,7 @@ function enterApp(){
   document.getElementById("tab-manage").style.display = isManagerOrAdmin() ? "inline-block" : "none";
   populateProjectFilter();
   renderAll();
+  navigateTo("kanban");
 }
 
 /* ============================================================
@@ -635,6 +726,10 @@ document.getElementById("tabs").addEventListener("click", (e) => {
 });
 
 function navigateTo(viewName){
+  if (viewName === "manage" && !isManagerOrAdmin()){
+    alert("You don't have access to the Manage section.");
+    viewName = "kanban";
+  }
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.view === viewName));
   document.querySelectorAll("main .view").forEach(v => v.classList.remove("active"));
   const target = document.getElementById(`view-${viewName}`);
@@ -644,6 +739,7 @@ function navigateTo(viewName){
   if (viewName === "directory") renderDirectory();
   if (viewName === "mobile") renderMobile();
   if (viewName === "manage") renderManage();
+  if (viewName === "audit") renderAuditSection();
 }
 
 /* ============================================================
@@ -706,6 +802,89 @@ function renderManage(){
   }
   userProjSel.onchange = refreshNewUserDeptOptions;
   refreshNewUserDeptOptions();
+
+  renderStatusList();
+}
+
+/* ---------- Manage: statuses (add/delete/color/sort) ---------- */
+function renderStatusList(){
+  const wrap = document.getElementById("status-list");
+  if (!wrap) return;
+  const ordered = [...state.statuses].sort((a, b) => a.sort_order - b.sort_order);
+  wrap.innerHTML = ordered.map((s, idx) => {
+    const inUse = state.tasks.some(t => t.status_id === s.id);
+    return `
+    <div class="status-row">
+      <input type="color" class="status-swatch" value="${s.color || '#3d6cff'}" onchange="updateStatusColor(${s.id}, this.value)" />
+      <span class="status-name">${s.name}</span>
+      <span class="status-count">${state.tasks.filter(t => t.status_id === s.id).length} task(s)</span>
+      <div class="sort-btns">
+        <button onclick="moveStatus(${s.id}, -1)" ${idx === 0 ? "disabled" : ""} title="Move up">▲</button>
+        <button onclick="moveStatus(${s.id}, 1)" ${idx === ordered.length - 1 ? "disabled" : ""} title="Move down">▼</button>
+      </div>
+      <button class="icon-btn danger" onclick="deleteStatus(${s.id})" ${inUse ? "disabled title='Reassign or clear tasks from this status first'" : ""}>Delete</button>
+    </div>`;
+  }).join("") || `<p style="color:var(--ink-soft); font-size:12px;">No statuses yet.</p>`;
+}
+
+async function addStatus(){
+  const name = document.getElementById("new-status-name").value.trim();
+  const color = document.getElementById("new-status-color").value;
+  if (!name){ alert("Enter a status name."); return; }
+  if (!supabaseClient){ alert("Supabase isn't configured."); return; }
+  const sortOrder = state.statuses.length ? Math.max(...state.statuses.map(s => s.sort_order)) + 1 : 1;
+  const { data, error } = await supabaseClient.from("statuses").insert({ name, color, sort_order: sortOrder }).select().single();
+  if (error){ alert("Couldn't add status: " + error.message); return; }
+  state.statuses.push(data);
+  saveCache();
+  document.getElementById("new-status-name").value = "";
+  renderStatusList();
+  renderKanban();
+}
+
+async function updateStatusColor(statusId, color){
+  const s = state.statuses.find(s => s.id === statusId);
+  if (!s) return;
+  s.color = color;
+  saveCache();
+  renderKanban();
+  if (supabaseClient){
+    const { error } = await supabaseClient.from("statuses").update({ color }).eq("id", statusId);
+    if (error) console.error("status color sync failed:", error);
+  }
+}
+
+async function moveStatus(statusId, direction){
+  const ordered = [...state.statuses].sort((a, b) => a.sort_order - b.sort_order);
+  const idx = ordered.findIndex(s => s.id === statusId);
+  const swapIdx = idx + direction;
+  if (idx === -1 || swapIdx < 0 || swapIdx >= ordered.length) return;
+  const a = ordered[idx], b = ordered[swapIdx];
+  const tempOrder = a.sort_order;
+  a.sort_order = b.sort_order;
+  b.sort_order = tempOrder;
+  saveCache();
+  renderStatusList();
+  renderKanban();
+  if (supabaseClient){
+    await Promise.all([
+      supabaseClient.from("statuses").update({ sort_order: a.sort_order }).eq("id", a.id),
+      supabaseClient.from("statuses").update({ sort_order: b.sort_order }).eq("id", b.id),
+    ]);
+  }
+}
+
+async function deleteStatus(statusId){
+  const inUse = state.tasks.some(t => t.status_id === statusId);
+  if (inUse){ alert("This status has tasks assigned to it. Move or reassign those tasks before deleting."); return; }
+  if (!confirm("Delete this status?")) return;
+  if (!supabaseClient){ alert("Supabase isn't configured."); return; }
+  const { error } = await supabaseClient.from("statuses").delete().eq("id", statusId);
+  if (error){ alert("Couldn't delete status: " + error.message); return; }
+  state.statuses = state.statuses.filter(s => s.id !== statusId);
+  saveCache();
+  renderStatusList();
+  renderKanban();
 }
 
 async function addProject(){
@@ -792,6 +971,15 @@ function renderAll(){
 }
 
 function statusName(id){ return state.statuses.find(s => s.id === id)?.name || "—"; }
+function statusColor(id){ return state.statuses.find(s => s.id === id)?.color || "#3d6cff"; }
+function hexToRgba(hex, alpha){
+  const h = (hex || "#3d6cff").replace("#", "");
+  const full = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+  const r = parseInt(full.substring(0, 2), 16) || 61;
+  const g = parseInt(full.substring(2, 4), 16) || 108;
+  const b = parseInt(full.substring(4, 6), 16) || 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 function priorityName(id){ return state.priorities.find(p => p.id === id)?.name || "—"; }
 function userName(id){ return state.users.find(u => u.id === id)?.name || "Unassigned"; }
 function departmentName(id){ return state.departments.find(d => d.id === id)?.name || "—"; }
@@ -855,6 +1043,9 @@ function renderTaskCard(t){
   const card = document.createElement("div");
   const pName = priorityName(t.priority_id);
   card.className = `task-card priority-${pName}`;
+  const sColor = statusColor(t.status_id);
+  card.style.setProperty("--status-accent", sColor);
+  card.style.background = `linear-gradient(${hexToRgba(sColor, 0.14)}, ${hexToRgba(sColor, 0.14)}), #ffffff`;
   card.draggable = true;
   card.addEventListener("dragstart", e => e.dataTransfer.setData("text/task-id", t.id));
   card.addEventListener("click", (e) => { if (!e.target.closest(".btn-next-status")) openTaskModal(t.id); });
@@ -887,12 +1078,11 @@ async function moveTaskToStatus(taskId, newStatusId){
   saveCache();
 
   if (supabaseClient){
-    const { error } = await supabaseClient.from("tasks").update({
-      status_id: payload.status_id,
-      complete: payload.complete,
-      actual_start: payload.actual_start,
-      actual_finish: payload.actual_finish,
-    }).eq("id", taskId);
+    const { error } = await supabaseClient.rpc("update_task_as_user", {
+      p_task_id: taskId,
+      p_actor_id: state.currentUser?.id || null,
+      p_payload: task, // full current (already-merged) task object — RPC overwrites all fields, so send it whole
+    });
     if (error) console.error("sync failed, kept local optimistic state:", error);
   }
 }
@@ -917,7 +1107,11 @@ function openTaskModal(taskId){
 
   const deptSel = document.getElementById("task-department");
   function refreshDeptOptions(preserveValue){
-    const scoped = departmentsForProject(Number(projSel.value));
+    let scoped = departmentsForProject(Number(projSel.value));
+    if (!isEdit && state.currentUser?.role === "User"){
+      const myDepts = myDepartmentIds();
+      scoped = scoped.filter(d => myDepts.includes(d.id));
+    }
     deptSel.innerHTML = scoped.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
     deptSel.value = preserveValue && scoped.some(d => d.id === preserveValue) ? preserveValue : scoped[0]?.id;
   }
@@ -992,6 +1186,31 @@ async function addComment(){
   }
 }
 
+// Fields shown in field-level diffs: status, assignee, and dates.
+const AUDIT_TRACKED_FIELDS = {
+  status_id: { label: "Status", format: v => statusName(Number(v)) },
+  assigned_to: { label: "Assignee", format: v => userName(Number(v)) },
+  planned_start: { label: "Planned start", format: v => v || "—" },
+  planned_finish: { label: "Planned finish", format: v => v || "—" },
+  actual_start: { label: "Actual start", format: v => v || "—" },
+  actual_finish: { label: "Actual finish", format: v => v || "—" },
+};
+
+function diffHtmlForEntry(entry){
+  if (entry.action !== "UPDATE" || !entry.changed_data?.old || !entry.changed_data?.new){
+    return `<span style="color:var(--ink-soft)">Task created.</span>`;
+  }
+  const oldD = entry.changed_data.old, newD = entry.changed_data.new;
+  const lines = Object.entries(AUDIT_TRACKED_FIELDS)
+    .filter(([field]) => String(oldD[field] ?? "") !== String(newD[field] ?? ""))
+    .map(([field, cfg]) => `
+      <div class="audit-diff-line">
+        <span class="field">${cfg.label}:</span>
+        <span class="old-val">${cfg.format(oldD[field])}</span> → <span class="new-val">${cfg.format(newD[field])}</span>
+      </div>`);
+  return lines.length ? lines.join("") : `<span style="color:var(--ink-soft)">No tracked-field changes.</span>`;
+}
+
 async function loadAuditTrail(taskId){
   const list = document.getElementById("audit-list");
   list.innerHTML = `<div class="comment" style="color:var(--ink-soft)">Loading...</div>`;
@@ -1011,8 +1230,79 @@ async function loadAuditTrail(taskId){
     return;
   }
   list.innerHTML = (data && data.length)
-    ? data.map(entry => `<div class="comment"><b>${entry.action}</b> — ${new Date(entry.changed_at).toLocaleString()}</div>`).join("")
+    ? data.map(entry => `
+        <div class="comment">
+          <b>${entry.action}</b> — ${new Date(entry.changed_at).toLocaleString()}
+          ${entry.changed_by ? `<span style="color:var(--ink-soft)"> by ${userName(entry.changed_by)}</span>` : ""}
+          <div style="margin-top:3px;">${diffHtmlForEntry(entry)}</div>
+        </div>`).join("")
     : `<div class="comment" style="color:var(--ink-soft)">No history yet.</div>`;
+}
+
+/* ============================================================
+   AUDIT TRAIL — dedicated section with User / Task filters
+   ============================================================ */
+let auditFilters = { user: "all", task: "all" };
+let auditLogCache = [];
+
+function populateAuditFilters(){
+  const userSel = document.getElementById("audit-filter-user");
+  userSel.innerHTML = `<option value="all">All users</option>` +
+    state.users.map(u => `<option value="${u.id}">${u.name}</option>`).join("");
+  userSel.value = auditFilters.user;
+
+  const taskSel = document.getElementById("audit-filter-task");
+  taskSel.innerHTML = `<option value="all">All tasks</option>` +
+    state.tasks.map(t => `<option value="${t.id}">${t.title}</option>`).join("");
+  taskSel.value = auditFilters.task;
+}
+document.getElementById("audit-filter-user")?.addEventListener?.("change", e => { auditFilters.user = e.target.value; renderAuditSection(); });
+document.getElementById("audit-filter-task")?.addEventListener?.("change", e => { auditFilters.task = e.target.value; renderAuditSection(); });
+
+async function renderAuditSection(){
+  populateAuditFilters();
+  const table = document.getElementById("audit-table");
+  const emptyMsg = document.getElementById("audit-empty");
+  table.innerHTML = `<tr><th>When</th><th>Task</th><th>Action</th><th>Changed by</th><th>What changed</th></tr>`;
+
+  if (!supabaseClient){
+    emptyMsg.textContent = "Not available offline.";
+    emptyMsg.style.display = "block";
+    return;
+  }
+
+  let query = supabaseClient.from("audit_logs").select("*").eq("table_name", "tasks").order("changed_at", { ascending: false }).limit(200);
+  if (auditFilters.task !== "all") query = query.eq("record_id", Number(auditFilters.task));
+  if (auditFilters.user !== "all") query = query.eq("changed_by", Number(auditFilters.user));
+
+  const { data, error } = await query;
+  if (error){
+    emptyMsg.textContent = "Couldn't load audit trail: " + error.message;
+    emptyMsg.style.display = "block";
+    return;
+  }
+  auditLogCache = data || [];
+
+  if (!auditLogCache.length){
+    emptyMsg.style.display = "block";
+    emptyMsg.textContent = "No audit entries match these filters.";
+    return;
+  }
+  emptyMsg.style.display = "none";
+
+  const rows = auditLogCache.map(entry => {
+    const taskTitle = state.tasks.find(t => t.id === entry.record_id)?.title
+      || entry.changed_data?.new?.title || entry.changed_data?.old?.title || entry.changed_data?.title || `Task #${entry.record_id}`;
+    return `
+      <tr>
+        <td>${new Date(entry.changed_at).toLocaleString()}</td>
+        <td>${taskTitle}</td>
+        <td><span class="audit-action-pill">${entry.action}</span></td>
+        <td>${entry.changed_by ? userName(entry.changed_by) : "—"}</td>
+        <td>${diffHtmlForEntry(entry)}</td>
+      </tr>`;
+  }).join("");
+  table.insertAdjacentHTML("beforeend", rows);
 }
 
 async function saveTask(){
@@ -1047,17 +1337,28 @@ async function saveTask(){
     renderAll();
     saveCache();
     if (supabaseClient){
-      const { error } = await supabaseClient.from("tasks").update(processed).eq("id", id);
+      const { error } = await supabaseClient.rpc("update_task_as_user", {
+        p_task_id: id,
+        p_actor_id: state.currentUser?.id || null,
+        p_payload: existing, // full merged task, so the RPC's overwrite-style update doesn't null unrelated fields
+      });
       if (error) console.error("update sync failed:", error);
     }
   } else {
+    if (!canCreateTaskInDepartment(payload.department_id)){
+      alert("You can only create tasks in your own department.");
+      return;
+    }
     const localId = Date.now();
     const newTask = { id: localId, ...processed, complete: !!processed.complete };
     state.tasks.push(newTask);
     renderAll();
     saveCache();
     if (supabaseClient){
-      const { data, error } = await supabaseClient.from("tasks").insert(processed).select().single();
+      const { data, error } = await supabaseClient.rpc("create_task_as_user", {
+        p_actor_id: state.currentUser?.id || null,
+        p_payload: processed,
+      }).single();
       if (!error && data){
         // reconcile local temp id with real DB id
         const idx = state.tasks.findIndex(t => t.id === localId);
@@ -1081,7 +1382,10 @@ async function deleteTask(){
   saveCache();
   closeTaskModal();
   if (supabaseClient){
-    const { error } = await supabaseClient.from("tasks").delete().eq("id", id);
+    const { error } = await supabaseClient.rpc("delete_task_as_user", {
+      p_task_id: id,
+      p_actor_id: state.currentUser?.id || null,
+    });
     if (error) console.error("delete sync failed:", error);
   }
 }
@@ -1112,8 +1416,12 @@ function renderGantt(){
   populateGanttFilters();
   const container = document.getElementById("gantt-rows");
   const gridWrap = document.getElementById("gantt-gridlines");
+  const wrapEl = document.querySelector(".gantt-wrap");
   container.innerHTML = "";
   gridWrap.innerHTML = "";
+
+  const isMonthView = ganttFilters.granularity === "month";
+  wrapEl.classList.toggle("compressed", isMonthView);
 
   let tasks = visibleTasks();
   if (ganttFilters.project !== "all") tasks = tasks.filter(t => t.project_id === Number(ganttFilters.project));
@@ -1123,6 +1431,7 @@ function renderGantt(){
     container.innerHTML = `<p style="color:var(--ink-soft)">No tasks match the current filters.</p>`;
     return;
   }
+  container.classList.toggle("two-col", isMonthView && tasks.length > 8);
   const allDates = [];
   tasks.forEach(t => {
     [t.planned_start, t.planned_finish, t.actual_start, t.actual_finish,
@@ -1257,13 +1566,73 @@ function renderAnalytics(){
 function renderDirectory(){
   const table = document.getElementById("directory-table");
   const tasks = visibleTasks();
+  const canManage = isManagerOrAdmin();
   table.innerHTML = `
-    <tr><th>Name</th><th>Role</th><th>Open tasks</th></tr>
+    <tr><th>Name</th><th>Role</th><th>Open tasks</th>${canManage ? "<th>Actions</th>" : ""}</tr>
     ${state.users.map(u => {
       const openCount = tasks.filter(t => t.assigned_to === u.id && !t.complete).length;
-      return `<tr><td>${u.name}</td><td><span class="role-pill">${u.role}</span></td><td>${openCount}</td></tr>`;
+      const actions = canManage
+        ? `<td><button class="icon-btn" onclick="openUserModal(${u.id})">Edit</button><button class="icon-btn danger" onclick="deleteUser(${u.id})">Delete</button></td>`
+        : "";
+      return `<tr><td>${u.name}</td><td><span class="role-pill">${u.role}</span></td><td>${openCount}</td>${actions}</tr>`;
     }).join("")}
   `;
+}
+
+/* ---------- Team: edit / delete user ---------- */
+function openUserModal(userId){
+  const u = state.users.find(u => u.id === userId);
+  if (!u) return;
+  document.getElementById("edit-user-id").value = userId;
+  document.getElementById("edit-user-name").value = u.name;
+  document.getElementById("edit-user-role").value = u.role;
+  document.getElementById("edit-user-pin").value = "";
+  document.getElementById("user-modal-backdrop").classList.add("active");
+}
+function closeUserModal(){
+  document.getElementById("user-modal-backdrop").classList.remove("active");
+}
+async function saveUserEdit(){
+  const id = Number(document.getElementById("edit-user-id").value);
+  const name = document.getElementById("edit-user-name").value.trim();
+  const role = document.getElementById("edit-user-role").value;
+  const newPin = document.getElementById("edit-user-pin").value.trim();
+  if (!name){ alert("Name is required."); return; }
+  if (newPin && !/^\d{4}$/.test(newPin)){ alert("PIN must be exactly 4 digits."); return; }
+  if (!supabaseClient){ alert("Supabase isn't configured."); return; }
+
+  const { error } = await supabaseClient.from("users").update({ name, role }).eq("id", id);
+  if (error){ alert("Couldn't update user: " + error.message); return; }
+
+  if (newPin){
+    const { error: pinError } = await supabaseClient.rpc("update_user_pin", { p_user_id: id, p_new_pin: newPin });
+    if (pinError) alert("Name/role saved, but PIN reset failed: " + pinError.message);
+  }
+
+  const local = state.users.find(u => u.id === id);
+  if (local){ local.name = name; local.role = role; }
+  if (state.currentUser?.id === id){ state.currentUser.name = name; state.currentUser.role = role; }
+  saveCache();
+  closeUserModal();
+  renderDirectory();
+  renderKanban();
+  document.getElementById("whoami").textContent = `${state.currentUser.name} — ${state.currentUser.role}`;
+}
+async function deleteUser(userIdArg){
+  const id = userIdArg || Number(document.getElementById("edit-user-id").value);
+  if (!id) return;
+  if (state.currentUser?.id === id){ alert("You can't delete your own account while signed in as it."); return; }
+  if (!confirm("Delete this team member? This cannot be undone.")) return;
+  if (!supabaseClient){ alert("Supabase isn't configured."); return; }
+  const { error } = await supabaseClient.from("users").delete().eq("id", id);
+  if (error){ alert("Couldn't delete user: " + error.message); return; }
+  state.users = state.users.filter(u => u.id !== id);
+  state.userDepartments = state.userDepartments.filter(ud => ud.user_id !== id);
+  state.userProjects = state.userProjects.filter(up => up.user_id !== id);
+  saveCache();
+  closeUserModal();
+  renderDirectory();
+  renderKanban();
 }
 
 /* ============================================================
