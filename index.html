@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Stratega PM</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root{
@@ -88,6 +89,16 @@
   .task-card h4{ margin:0 0 4px; font-size:13.5px; }
   .task-card .meta{ font-size:11px; color:var(--ink-soft); display:flex; justify-content:space-between; }
   .task-card .comment-count{ font-size:11px; color:var(--accent); margin-top:6px; }
+  .btn-next-status{
+    margin-top:8px; width:100%; background:rgba(61,108,255,0.1); color:var(--accent);
+    border:none; border-radius:8px; padding:6px 8px; font-size:11px; font-weight:600; cursor:pointer;
+  }
+  .btn-next-status:hover{ background:var(--accent); color:#fff; }
+  .toggle-btn{
+    background:rgba(0,0,0,0.06); border:none; padding:8px 12px; border-radius:8px;
+    font-size:12px; font-weight:600; cursor:pointer; color:var(--ink-soft);
+  }
+  .toggle-btn.active{ background:var(--accent); color:#fff; }
   .kanban-col.dragover{ outline:2px dashed var(--accent); }
 
   /* Modal */
@@ -190,7 +201,13 @@
   <main>
     <!-- KANBAN -->
     <section class="view active" id="view-kanban">
-      <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="kanban-priority-filter" style="padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;">
+            <option value="all">All priorities</option>
+          </select>
+          <button id="btn-assigned-to-me" class="toggle-btn" onclick="toggleAssignedToMe()">Assigned to me</button>
+        </div>
         <button class="primary" style="width:auto;" onclick="openTaskModal()">+ New task</button>
       </div>
       <div class="kanban" id="kanban-board"></div>
@@ -199,13 +216,25 @@
     <!-- GANTT -->
     <section class="view" id="view-gantt">
       <div class="gantt-wrap glass">
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+          <select id="gantt-project-filter" style="padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;"></select>
+          <select id="gantt-department-filter" style="padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;"></select>
+          <select id="gantt-granularity" style="padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;">
+            <option value="day">Day</option>
+            <option value="week" selected>Week</option>
+            <option value="month">Month</option>
+          </select>
+        </div>
         <div class="gantt-legend">
           <span><span class="legend-dot" style="background:var(--accent-soft)"></span>Planned</span>
           <span><span class="legend-dot" style="background:var(--ok)"></span>Actual</span>
           <span><span class="legend-dot" style="background:#b39ddb"></span>Baseline 1</span>
           <span><span class="legend-dot" style="background:#7e57c2"></span>Baseline 2</span>
         </div>
-        <div id="gantt-rows"></div>
+        <div id="gantt-grid-wrap" style="position:relative;">
+          <div id="gantt-gridlines" style="position:absolute; inset:0; pointer-events:none;"></div>
+          <div id="gantt-rows" style="position:relative;"></div>
+        </div>
       </div>
     </section>
 
@@ -255,6 +284,10 @@
           <div><label>Department name</label><input id="new-department-name" /></div>
           <div><label>Parent department (optional)</label><select id="new-department-parent"></select></div>
         </div>
+        <div class="row2">
+          <div><label>Project scope</label><select id="new-department-project"></select></div>
+          <div></div>
+        </div>
         <button class="primary" style="width:auto; margin-top:10px;" onclick="addDepartment()">Add department</button>
       </div>
 
@@ -269,8 +302,8 @@
           </div>
         </div>
         <div class="row2">
-          <div><label>Project</label><select id="new-user-project"></select></div>
-          <div><label>Department</label><select id="new-user-department"></select></div>
+          <div><label>Project(s) — hold Ctrl/Cmd to select multiple</label><select id="new-user-project" multiple size="4"></select></div>
+          <div><label>Department(s) — filtered by project(s) above</label><select id="new-user-department" multiple size="4"></select></div>
         </div>
         <div class="row2">
           <div><label>PIN (4 digits)</label><input id="new-user-pin" maxlength="4" placeholder="1234" /></div>
@@ -379,6 +412,7 @@ let state = {
   comments: [],       // { id, task_id, author_id, body, created_at }
   automationRules: [],
   userDepartments: [], // { user_id, department_id }
+  userProjects: [],    // { user_id, project_id }
 };
 
 function saveCache(){
@@ -432,7 +466,7 @@ async function fetchAllReferenceData(){
     return;
   }
   try {
-    const [u, d, p, s, pr, t, c, ar, ud] = await Promise.all([
+    const [u, d, p, s, pr, t, c, ar, ud, up] = await Promise.all([
       supabaseClient.from("users").select("*"),
       supabaseClient.from("departments").select("*"),
       supabaseClient.from("projects").select("*"),
@@ -442,8 +476,9 @@ async function fetchAllReferenceData(){
       supabaseClient.from("task_comments").select("*"),
       supabaseClient.from("automation_rules").select("*"),
       supabaseClient.from("user_departments").select("*"),
+      supabaseClient.from("user_projects").select("*"),
     ]);
-    [u, d, p, s, pr, t, c, ar, ud].forEach(res => { if (res.error) console.error("Fetch error:", res.error); });
+    [u, d, p, s, pr, t, c, ar, ud, up].forEach(res => { if (res.error) console.error("Fetch error:", res.error); });
     state.users = u.data || state.users;
     state.departments = d.data || state.departments;
     state.projects = p.data || state.projects;
@@ -453,6 +488,7 @@ async function fetchAllReferenceData(){
     state.comments = c.data || state.comments;
     state.automationRules = ar.data || state.automationRules;
     state.userDepartments = ud.data || state.userDepartments;
+    state.userProjects = up.data || state.userProjects;
     saveCache();
   } catch(e){
     console.error("fetchAllReferenceData failed, falling back to cached data:", e);
@@ -521,6 +557,17 @@ function myDepartmentIds(){
   const uid = state.currentUser?.id;
   return state.userDepartments.filter(ud => ud.user_id === uid).map(ud => ud.department_id);
 }
+function myProjectIds(){
+  const uid = state.currentUser?.id;
+  const fromJunction = state.userProjects.filter(up => up.user_id === uid).map(up => up.project_id);
+  const primary = state.currentUser?.project_id;
+  return [...new Set([...(primary ? [primary] : []), ...fromJunction])];
+}
+// Departments available for a given project: global (project_id null) + that project's own
+function departmentsForProject(projectId){
+  if (!projectId) return state.departments;
+  return state.departments.filter(d => d.project_id === null || d.project_id === Number(projectId));
+}
 function canEditTask(task){
   const u = state.currentUser;
   if (!u) return false;
@@ -536,10 +583,11 @@ function canEditTask(task){
 
 function visibleTasks(){
   if (isManagerOrAdmin() && state.currentProjectFilter === "all") return state.tasks;
-  const projectId = state.currentProjectFilter === "all"
-    ? state.currentUser?.project_id
-    : Number(state.currentProjectFilter);
-  return state.tasks.filter(t => t.project_id === projectId);
+  if (state.currentProjectFilter === "all"){
+    const myProjects = myProjectIds();
+    return state.tasks.filter(t => myProjects.includes(t.project_id));
+  }
+  return state.tasks.filter(t => t.project_id === Number(state.currentProjectFilter));
 }
 
 function populateProjectFilter(){
@@ -549,11 +597,16 @@ function populateProjectFilter(){
       state.projects.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
     sel.disabled = false;
   } else {
-    // regular Users are locked to their own project
-    const own = state.projects.find(p => p.id === state.currentUser?.project_id);
-    sel.innerHTML = `<option value="${state.currentUser?.project_id}">${own ? own.name : "My project"}</option>`;
-    sel.disabled = true;
-    state.currentProjectFilter = state.currentUser?.project_id;
+    // regular Users: locked to their assigned project(s), but can pick among them
+    const myProjects = myProjectIds();
+    const options = state.projects.filter(p => myProjects.includes(p.id));
+    sel.innerHTML = options.length > 1
+      ? `<option value="all">All my projects</option>` + options.map(p => `<option value="${p.id}">${p.name}</option>`).join("")
+      : options.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+    sel.disabled = false; // Users with multiple projects can switch between them
+    if (state.currentProjectFilter !== "all" && !myProjects.includes(Number(state.currentProjectFilter))){
+      state.currentProjectFilter = options.length > 1 ? "all" : (options[0]?.id || "all");
+    }
   }
 }
 
@@ -605,29 +658,54 @@ function renderManage(){
   document.getElementById("manage-add-project-panel").style.display = isAdmin() ? "block" : "none";
 
   const parentSel = document.getElementById("new-department-parent");
-  parentSel.innerHTML = `<option value="">None</option>` +
-    state.departments.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  if (isAdmin()){
+    parentSel.innerHTML = `<option value="">None</option>` +
+      state.departments.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  } else {
+    const myDepts = myDepartmentIds();
+    const scopedParents = myDepts.length ? state.departments.filter(d => myDepts.includes(d.id)) : state.departments;
+    parentSel.innerHTML = `<option value="">None</option>` +
+      scopedParents.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  }
+
+  const deptProjSel = document.getElementById("new-department-project");
+  if (isAdmin()){
+    deptProjSel.innerHTML = `<option value="">All projects (global)</option>` +
+      state.projects.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+  } else {
+    const myProjects = myProjectIds();
+    deptProjSel.innerHTML = state.projects.filter(p => myProjects.includes(p.id))
+      .map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+  }
 
   const userProjSel = document.getElementById("new-user-project");
   const userDeptSel = document.getElementById("new-user-department");
+
+  function refreshNewUserDeptOptions(){
+    const selectedProjectIds = Array.from(userProjSel.selectedOptions).map(o => Number(o.value));
+    let scoped = selectedProjectIds.length
+      ? state.departments.filter(d => d.project_id === null || selectedProjectIds.includes(d.project_id))
+      : state.departments;
+    if (!isAdmin()){
+      const myDepts = myDepartmentIds();
+      if (myDepts.length) scoped = scoped.filter(d => myDepts.includes(d.id));
+    }
+    userDeptSel.innerHTML = scoped.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  }
 
   if (isAdmin()){
     // Admins: unrestricted, can add users/departments/projects anywhere
     userProjSel.innerHTML = state.projects.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
     userProjSel.disabled = false;
-    userDeptSel.innerHTML = state.departments.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
-    userDeptSel.disabled = false;
   } else {
-    // Managers: locked to their own project; can pick among their own departments
-    const ownProject = state.projects.find(p => p.id === state.currentUser.project_id);
-    userProjSel.innerHTML = `<option value="${state.currentUser.project_id}">${ownProject ? ownProject.name : "My project"}</option>`;
-    userProjSel.disabled = true;
-
-    const myDepts = myDepartmentIds();
-    const scopedDepts = myDepts.length ? state.departments.filter(d => myDepts.includes(d.id)) : state.departments;
-    userDeptSel.innerHTML = scopedDepts.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
-    userDeptSel.disabled = false;
+    // Managers: locked to their own project(s)
+    const myProjects = myProjectIds();
+    const scopedProjects = state.projects.filter(p => myProjects.includes(p.id));
+    userProjSel.innerHTML = scopedProjects.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+    userProjSel.disabled = false;
   }
+  userProjSel.onchange = refreshNewUserDeptOptions;
+  refreshNewUserDeptOptions();
 }
 
 async function addProject(){
@@ -648,13 +726,20 @@ async function addProject(){
 async function addDepartment(){
   const name = document.getElementById("new-department-name").value.trim();
   const parentVal = document.getElementById("new-department-parent").value;
+  const projectVal = document.getElementById("new-department-project").value;
   if (!name){ alert("Enter a department name."); return; }
   if (!supabaseClient){ alert("Supabase isn't configured."); return; }
   const { data, error } = await supabaseClient.from("departments").insert({
-    name, parent_department_id: parentVal ? Number(parentVal) : null
+    name,
+    parent_department_id: parentVal ? Number(parentVal) : null,
+    project_id: projectVal ? Number(projectVal) : null
   }).select().single();
   if (error){ alert("Couldn't add department: " + error.message); return; }
   state.departments.push(data);
+  if (!isAdmin()){
+    await supabaseClient.from("user_departments").insert({ user_id: state.currentUser.id, department_id: data.id });
+    state.userDepartments.push({ user_id: state.currentUser.id, department_id: data.id });
+  }
   saveCache();
   renderManage();
   document.getElementById("new-department-name").value = "";
@@ -664,27 +749,35 @@ async function addDepartment(){
 async function addUser(){
   const name = document.getElementById("new-user-name").value.trim();
   const role = document.getElementById("new-user-role").value;
-  const projectId = Number(document.getElementById("new-user-project").value);
-  const departmentId = Number(document.getElementById("new-user-department").value);
+  const projectIds = Array.from(document.getElementById("new-user-project").selectedOptions).map(o => Number(o.value));
+  const departmentIds = Array.from(document.getElementById("new-user-department").selectedOptions).map(o => Number(o.value));
   const pin = document.getElementById("new-user-pin").value.trim();
 
   if (!name || !/^\d{4}$/.test(pin)){ alert("Enter a name and a 4-digit PIN."); return; }
+  if (!projectIds.length){ alert("Select at least one project."); return; }
   if (!supabaseClient){ alert("Supabase isn't configured."); return; }
 
+  const primaryProjectId = projectIds[0]; // first selection = primary project (used for default filtering)
+
   const { data: newUserId, error } = await supabaseClient.rpc("create_user_with_pin", {
-    p_name: name, p_role: role, p_project_id: projectId, p_pin: pin
+    p_name: name, p_role: role, p_project_id: primaryProjectId, p_pin: pin
   });
   if (error){ alert("Couldn't add team member: " + error.message); return; }
 
-  await supabaseClient.from("user_departments").insert({ user_id: newUserId, department_id: departmentId });
+  const projectRows = projectIds.map(pid => ({ user_id: newUserId, project_id: pid }));
+  const deptRows = departmentIds.map(did => ({ user_id: newUserId, department_id: did }));
+  if (projectRows.length) await supabaseClient.from("user_projects").insert(projectRows);
+  if (deptRows.length) await supabaseClient.from("user_departments").insert(deptRows);
 
-  state.users.push({ id: newUserId, name, role, project_id: projectId, pin_hash: "" });
+  state.users.push({ id: newUserId, name, role, project_id: primaryProjectId, pin_hash: "" });
+  state.userProjects.push(...projectRows);
+  state.userDepartments.push(...deptRows);
   saveCache();
   renderManage();
   renderDirectory();
   document.getElementById("new-user-name").value = "";
   document.getElementById("new-user-pin").value = "";
-  alert(`Team member "${name}" added with PIN ${pin}.`);
+  alert(`Team member "${name}" added with PIN ${pin}, across ${projectIds.length} project(s) and ${departmentIds.length} department(s).`);
 }
 
 /* ============================================================
@@ -705,13 +798,18 @@ function departmentName(id){ return state.departments.find(d => d.id === id)?.na
 function commentsForTask(taskId){ return state.comments.filter(c => c.task_id === taskId); }
 
 function renderKanban(){
+  populateKanbanFilters();
   const board = document.getElementById("kanban-board");
   board.innerHTML = "";
+  let filtered = visibleTasks();
+  if (kanbanFilters.priority !== "all") filtered = filtered.filter(t => t.priority_id === Number(kanbanFilters.priority));
+  if (kanbanFilters.assignedToMe) filtered = filtered.filter(t => t.assigned_to === state.currentUser?.id);
+
   state.statuses.forEach(status => {
     const col = document.createElement("div");
     col.className = "kanban-col glass";
     col.dataset.statusId = status.id;
-    const tasksInCol = visibleTasks().filter(t => t.status_id === status.id);
+    const tasksInCol = filtered.filter(t => t.status_id === status.id);
     col.innerHTML = `<h3>${status.name} <span class="count">${tasksInCol.length}</span></h3>`;
     tasksInCol.forEach(t => col.appendChild(renderTaskCard(t)));
 
@@ -727,19 +825,51 @@ function renderKanban(){
   });
 }
 
+let kanbanFilters = { priority: "all", assignedToMe: false };
+
+function toggleAssignedToMe(){
+  kanbanFilters.assignedToMe = !kanbanFilters.assignedToMe;
+  document.getElementById("btn-assigned-to-me").classList.toggle("active", kanbanFilters.assignedToMe);
+  renderKanban();
+}
+
+function populateKanbanFilters(){
+  const sel = document.getElementById("kanban-priority-filter");
+  sel.innerHTML = `<option value="all">All priorities</option>` +
+    state.priorities.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+  sel.value = kanbanFilters.priority;
+}
+document.getElementById("kanban-priority-filter")?.addEventListener?.("change", (e) => {
+  kanbanFilters.priority = e.target.value;
+  renderKanban();
+});
+
+function nextStatusId(currentStatusId){
+  const ordered = [...state.statuses].sort((a, b) => a.sort_order - b.sort_order);
+  const idx = ordered.findIndex(s => s.id === currentStatusId);
+  if (idx === -1) return ordered[0]?.id;
+  return ordered[(idx + 1) % ordered.length].id;
+}
+
 function renderTaskCard(t){
   const card = document.createElement("div");
   const pName = priorityName(t.priority_id);
   card.className = `task-card priority-${pName}`;
   card.draggable = true;
   card.addEventListener("dragstart", e => e.dataTransfer.setData("text/task-id", t.id));
-  card.addEventListener("click", () => openTaskModal(t.id));
+  card.addEventListener("click", (e) => { if (!e.target.closest(".btn-next-status")) openTaskModal(t.id); });
   const cCount = commentsForTask(t.id).length;
+  const nextName = statusName(nextStatusId(t.status_id));
   card.innerHTML = `
     <h4>${t.title}</h4>
     <div class="meta"><span>${userName(t.assigned_to)}</span><span>${pName}</span></div>
     ${cCount ? `<div class="comment-count">${cCount} comment${cCount > 1 ? "s" : ""}</div>` : ""}
+    <button class="btn-next-status" title="Advance to ${nextName}">→ ${nextName}</button>
   `;
+  card.querySelector(".btn-next-status").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await moveTaskToStatus(t.id, nextStatusId(t.status_id));
+  });
   return card;
 }
 
@@ -786,8 +916,13 @@ function openTaskModal(taskId){
     || state.projects[0]?.id;
 
   const deptSel = document.getElementById("task-department");
-  deptSel.innerHTML = state.departments.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
-  deptSel.value = task?.department_id || state.departments[0]?.id;
+  function refreshDeptOptions(preserveValue){
+    const scoped = departmentsForProject(Number(projSel.value));
+    deptSel.innerHTML = scoped.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+    deptSel.value = preserveValue && scoped.some(d => d.id === preserveValue) ? preserveValue : scoped[0]?.id;
+  }
+  refreshDeptOptions(task?.department_id);
+  projSel.onchange = () => refreshDeptOptions(null);
 
   const asgSel = document.getElementById("task-assignee");
   asgSel.innerHTML = state.users.map(u => `<option value="${u.id}">${u.name}</option>`).join("");
@@ -952,14 +1087,40 @@ async function deleteTask(){
 }
 
 /* ============================================================
-   GANTT — planned vs actual vs dual baseline
+   GANTT — planned vs actual vs dual baseline, with filters + gridlines
    ============================================================ */
+let ganttFilters = { project: "all", department: "all", granularity: "week" };
+
+function populateGanttFilters(){
+  const projSel = document.getElementById("gantt-project-filter");
+  projSel.innerHTML = `<option value="all">All projects</option>` +
+    state.projects.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+  projSel.value = ganttFilters.project;
+
+  const deptSel = document.getElementById("gantt-department-filter");
+  deptSel.innerHTML = `<option value="all">All departments</option>` +
+    state.departments.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  deptSel.value = ganttFilters.department;
+
+  document.getElementById("gantt-granularity").value = ganttFilters.granularity;
+}
+document.getElementById("gantt-project-filter")?.addEventListener?.("change", e => { ganttFilters.project = e.target.value; renderGantt(); });
+document.getElementById("gantt-department-filter")?.addEventListener?.("change", e => { ganttFilters.department = e.target.value; renderGantt(); });
+document.getElementById("gantt-granularity")?.addEventListener?.("change", e => { ganttFilters.granularity = e.target.value; renderGantt(); });
+
 function renderGantt(){
+  populateGanttFilters();
   const container = document.getElementById("gantt-rows");
+  const gridWrap = document.getElementById("gantt-gridlines");
   container.innerHTML = "";
-  const tasks = visibleTasks();
+  gridWrap.innerHTML = "";
+
+  let tasks = visibleTasks();
+  if (ganttFilters.project !== "all") tasks = tasks.filter(t => t.project_id === Number(ganttFilters.project));
+  if (ganttFilters.department !== "all") tasks = tasks.filter(t => t.department_id === Number(ganttFilters.department));
+
   if (!tasks.length){
-    container.innerHTML = `<p style="color:var(--ink-soft)">No tasks yet.</p>`;
+    container.innerHTML = `<p style="color:var(--ink-soft)">No tasks match the current filters.</p>`;
     return;
   }
   const allDates = [];
@@ -975,6 +1136,7 @@ function renderGantt(){
   const minDate = new Date(Math.min(...allDates));
   const maxDate = new Date(Math.max(...allDates));
   const totalDays = Math.max(1, (maxDate - minDate) / 86400000);
+  const labelWidth = 180; // must match .gantt-label width in CSS
 
   function pct(dateStr){
     if (!dateStr) return null;
@@ -986,6 +1148,22 @@ function renderGantt(){
     if (s === null || e === null) return null;
     return Math.max(1, e - s);
   }
+
+  // ---- vertical gridlines (day/week/month) ----
+  const stepDays = ganttFilters.granularity === "day" ? 1 : ganttFilters.granularity === "week" ? 7 : 30;
+  let cursor = new Date(minDate);
+  const lines = [];
+  while (cursor <= maxDate){
+    const daysFromStart = (cursor - minDate) / 86400000;
+    const leftPct = (daysFromStart / totalDays) * 100;
+    lines.push({ leftPct, label: cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" }) });
+    cursor = new Date(cursor.getTime() + stepDays * 86400000);
+  }
+  gridWrap.innerHTML = lines.map(l => `
+    <div style="position:absolute; left:calc(${labelWidth}px + (100% - ${labelWidth}px) * ${l.leftPct / 100}); top:0; bottom:0; width:1px; background:rgba(0,0,0,0.08);"></div>
+    <div style="position:absolute; left:calc(${labelWidth}px + (100% - ${labelWidth}px) * ${l.leftPct / 100}); top:-18px; font-size:10px; color:var(--ink-soft); transform:translateX(2px);">${l.label}</div>
+  `).join("");
+  gridWrap.style.marginTop = "18px"; // room for date labels above the first row
 
   tasks.forEach(t => {
     const row = document.createElement("div");
