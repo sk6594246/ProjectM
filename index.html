@@ -6,6 +6,7 @@
 <title>Stratega PM</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg" />
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --glass-bg: rgba(255,255,255,0.55);
@@ -209,7 +210,7 @@
     <p>Enter your name and PIN to continue</p>
     <input id="login-name" type="text" placeholder="Your name" list="login-user-list" autocomplete="off" />
     <datalist id="login-user-list"></datalist>
-    <input id="login-pin" type="password" maxlength="4" placeholder="• • • •" />
+    <input id="login-pin" type="password" placeholder="Your PIN" style="letter-spacing:normal; text-align:left;" />
     <button class="primary" onclick="handleLogin()">Sign in</button>
     <div id="login-error"></div>
   </div>
@@ -367,7 +368,7 @@
           <div><label>Department(s) — filtered by project(s) above</label><select id="new-user-department" multiple size="4"></select></div>
         </div>
         <div class="row2">
-          <div><label>PIN (4 digits)</label><input id="new-user-pin" maxlength="4" placeholder="1234" /></div>
+          <div><label>PIN (min 4 characters, letters &amp; numbers)</label><input id="new-user-pin" placeholder="e.g. blue2026" /></div>
           <div></div>
         </div>
         <button class="primary" style="width:auto; margin-top:10px;" onclick="addUser()">Add team member</button>
@@ -381,6 +382,18 @@
           <div><label>Color</label><input type="color" id="new-status-color" value="#3d6cff" style="height:38px; padding:2px;" /></div>
         </div>
         <button class="primary" style="width:auto; margin-top:10px;" onclick="addStatus()">Add status</button>
+      </div>
+
+      <div class="panel glass">
+        <h3>Bulk task import / export</h3>
+        <p style="font-size:12px; color:var(--ink-soft); margin-top:-6px;">
+          Download the template, fill in rows in Excel, then upload it back. Rows with a Task ID update that task; leave Task ID blank to create a new task.
+          Names like Department/Status/Priority/Assignee/Project are matched by text — if a value doesn't match anything, that field falls back to a sensible default instead of failing the row.
+        </p>
+        <button class="primary" style="width:auto;" onclick="downloadTaskTemplate()">Download Excel template</button>
+        <input type="file" id="task-upload-input" accept=".xlsx,.xls" style="display:none" onchange="handleTaskUpload(event)" />
+        <button class="primary" style="width:auto; margin-left:10px;" onclick="document.getElementById('task-upload-input').click()">Upload filled template</button>
+        <div id="upload-summary" style="margin-top:12px; font-size:12.5px;"></div>
       </div>
     </section>
   </main>
@@ -452,13 +465,30 @@
     <select id="edit-user-role">
       <option>User</option><option>Manager</option><option>Admin</option>
     </select>
-    <label>Reset PIN (leave blank to keep current)</label>
-    <input id="edit-user-pin" maxlength="4" placeholder="New 4-digit PIN" />
+    <label>Reset PIN (leave blank to keep current, min 4 characters, letters &amp; numbers)</label>
+    <input id="edit-user-pin" placeholder="New PIN" />
     <div class="modal-actions">
       <button class="btn-delete" onclick="deleteUser()">Delete user</button>
       <div style="flex:1"></div>
       <button class="btn-cancel" onclick="closeUserModal()">Cancel</button>
       <button class="btn-save" onclick="saveUserEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== CHANGE OWN PIN MODAL ===================== -->
+<div class="modal-backdrop" id="own-pin-modal-backdrop">
+  <div class="modal glass" style="width:340px;">
+    <h2>Change my PIN</h2>
+    <label>New PIN (min 4 characters, letters &amp; numbers)</label>
+    <input id="own-pin-new" placeholder="New PIN" />
+    <label>Confirm new PIN</label>
+    <input id="own-pin-confirm" placeholder="Confirm new PIN" />
+    <div id="own-pin-error" style="color:var(--danger); font-size:12px; min-height:16px; margin-top:6px;"></div>
+    <div class="modal-actions">
+      <div style="flex:1"></div>
+      <button class="btn-cancel" onclick="closeOwnPinModal()">Cancel</button>
+      <button class="btn-save" onclick="saveOwnPin()">Save</button>
     </div>
   </div>
 </div>
@@ -642,6 +672,8 @@ function logout(){
 }
 
 function isAdmin(){ return state.currentUser?.role === "Admin"; }
+// PIN format: alphanumeric, minimum 4 characters, no maximum
+function isPinValid(pin){ return /^[a-zA-Z0-9]{4,}$/.test(pin || ""); }
 function isManagerOrAdmin(){
   const r = state.currentUser?.role;
   return r === "Admin" || r === "Manager";
@@ -899,6 +931,151 @@ async function deleteStatus(statusId){
   renderKanban();
 }
 
+/* ============================================================
+   BULK TASK IMPORT / EXPORT (Excel) — Manager/Admin only
+   Human-readable columns; unmatched lookups fall back to a
+   sensible default rather than failing the row.
+   ============================================================ */
+const TASK_TEMPLATE_HEADERS = [
+  "Task ID", "Title", "Description", "Project", "Department", "Assignee",
+  "Status", "Priority", "Planned Start", "Planned Finish",
+  "Actual Start", "Actual Finish",
+  "Baseline 1 Start", "Baseline 1 Finish", "Baseline 2 Start", "Baseline 2 Finish",
+];
+
+function downloadTaskTemplate(){
+  if (!isManagerOrAdmin()){ alert("You don't have access to this action."); return; }
+  if (typeof XLSX === "undefined"){ alert("Excel library didn't load — check your internet connection."); return; }
+
+  const exampleRow = [
+    "", "Set up staging environment", "Example row — delete before uploading",
+    state.projects[0]?.name || "", state.departments[0]?.name || "", state.users[0]?.name || "",
+    state.statuses[0]?.name || "", state.priorities[0]?.name || "",
+    "2026-08-01", "2026-08-10", "", "", "", "", "", "",
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const taskSheet = XLSX.utils.aoa_to_sheet([TASK_TEMPLATE_HEADERS, exampleRow]);
+  XLSX.utils.book_append_sheet(wb, taskSheet, "Tasks");
+
+  // Reference sheet listing valid values, so uploaders know what will match cleanly
+  const refRows = [["Valid Projects", "Valid Departments", "Valid Statuses", "Valid Priorities", "Valid Assignees"]];
+  const maxLen = Math.max(state.projects.length, state.departments.length, state.statuses.length, state.priorities.length, state.users.length);
+  for (let i = 0; i < maxLen; i++){
+    refRows.push([
+      state.projects[i]?.name || "",
+      state.departments[i]?.name || "",
+      state.statuses[i]?.name || "",
+      state.priorities[i]?.name || "",
+      state.users[i]?.name || "",
+    ]);
+  }
+  const refSheet = XLSX.utils.aoa_to_sheet(refRows);
+  XLSX.utils.book_append_sheet(wb, refSheet, "Reference values");
+
+  XLSX.writeFile(wb, "stratega_pm_task_template.xlsx");
+}
+
+// Case-insensitive name lookup with a fallback to the "lowest" record
+// (lowest id for projects/departments/users, lowest sort_order for statuses/priorities).
+function lookupByName(list, name, sortField){
+  const trimmed = String(name || "").trim().toLowerCase();
+  if (trimmed){
+    const match = list.find(item => String(item.name || "").trim().toLowerCase() === trimmed);
+    if (match) return match;
+  }
+  const fallbackList = sortField ? [...list].sort((a, b) => a[sortField] - b[sortField]) : [...list].sort((a, b) => a.id - b.id);
+  return fallbackList[0] || null;
+}
+function parseExcelDate(val){
+  if (!val) return null;
+  if (val instanceof Date) return val.toISOString().split("T")[0];
+  const str = String(val).trim();
+  if (!str) return null;
+  const d = new Date(str);
+  return isNaN(d) ? null : d.toISOString().split("T")[0];
+}
+
+async function handleTaskUpload(event){
+  if (!isManagerOrAdmin()){ alert("You don't have access to this action."); event.target.value = ""; return; }
+  const file = event.target.files[0];
+  event.target.value = ""; // allow re-selecting the same file later
+  if (!file) return;
+  if (typeof XLSX === "undefined"){ alert("Excel library didn't load — check your internet connection."); return; }
+  if (!supabaseClient){ alert("Supabase isn't configured."); return; }
+
+  const summaryEl = document.getElementById("upload-summary");
+  summaryEl.innerHTML = `<span style="color:var(--ink-soft)">Processing...</span>`;
+
+  const buffer = await file.arrayBuffer();
+  const wb = XLSX.read(buffer, { type: "array", cellDates: true });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+  let created = 0, updated = 0;
+  const skipped = [];
+
+  for (let i = 0; i < rows.length; i++){
+    const row = rows[i];
+    const rowNum = i + 2; // account for header row, 1-indexed
+    const title = String(row["Title"] || "").trim();
+    if (!title){ skipped.push(`Row ${rowNum}: missing Title (no sensible default — row skipped)`); continue; }
+
+    const project = lookupByName(state.projects, row["Project"]);
+    const department = lookupByName(state.departments, row["Department"]);
+    const assignee = lookupByName(state.users, row["Assignee"]);
+    const status = lookupByName(state.statuses, row["Status"], "sort_order");
+    const priority = lookupByName(state.priorities, row["Priority"], "sort_order");
+
+    const payload = {
+      title,
+      description: String(row["Description"] || ""),
+      project_id: project?.id ?? null,
+      department_id: department?.id ?? null,
+      assigned_to: assignee?.id ?? null,
+      status_id: status?.id ?? null,
+      priority_id: priority?.id ?? null,
+      planned_start: parseExcelDate(row["Planned Start"]),
+      planned_finish: parseExcelDate(row["Planned Finish"]),
+      actual_start: parseExcelDate(row["Actual Start"]),
+      actual_finish: parseExcelDate(row["Actual Finish"]),
+      baseline_1_start: parseExcelDate(row["Baseline 1 Start"]),
+      baseline_1_finish: parseExcelDate(row["Baseline 1 Finish"]),
+      baseline_2_start: parseExcelDate(row["Baseline 2 Start"]),
+      baseline_2_finish: parseExcelDate(row["Baseline 2 Finish"]),
+    };
+
+    const taskIdRaw = String(row["Task ID"] || "").trim();
+    const existingId = taskIdRaw && state.tasks.some(t => String(t.id) === taskIdRaw) ? Number(taskIdRaw) : null;
+
+    if (existingId){
+      const { error } = await supabaseClient.rpc("update_task_as_user", {
+        p_task_id: existingId,
+        p_actor_id: state.currentUser?.id || null,
+        p_payload: payload,
+      });
+      if (error){ skipped.push(`Row ${rowNum}: update failed — ${error.message}`); continue; }
+      updated++;
+    } else {
+      const { error } = await supabaseClient.rpc("create_task_as_user", {
+        p_actor_id: state.currentUser?.id || null,
+        p_payload: payload,
+      });
+      if (error){ skipped.push(`Row ${rowNum}: create failed — ${error.message}`); continue; }
+      created++;
+    }
+  }
+
+  await fetchAllReferenceData();
+  renderAll();
+  renderStatusList();
+
+  summaryEl.innerHTML = `
+    <div><b>${created}</b> task(s) created, <b>${updated}</b> task(s) updated.</div>
+    ${skipped.length ? `<div style="color:var(--danger); margin-top:6px;">${skipped.length} row(s) skipped:<br>${skipped.map(s => `• ${s}`).join("<br>")}</div>` : ""}
+  `;
+}
+
 async function addProject(){
   if (!isAdmin()){ alert("Only Admins can add projects."); return; }
   const name = document.getElementById("new-project-name").value.trim();
@@ -944,7 +1121,7 @@ async function addUser(){
   const departmentIds = Array.from(document.getElementById("new-user-department").selectedOptions).map(o => Number(o.value));
   const pin = document.getElementById("new-user-pin").value.trim();
 
-  if (!name || !/^\d{4}$/.test(pin)){ alert("Enter a name and a 4-digit PIN."); return; }
+  if (!name || !isPinValid(pin)){ alert("Enter a name and a PIN (min 4 characters, letters/numbers)."); return; }
   if (!projectIds.length){ alert("Select at least one project."); return; }
   if (!supabaseClient){ alert("Supabase isn't configured."); return; }
 
@@ -1707,13 +1884,16 @@ function renderDirectory(){
   const tasks = visibleTasks();
   const canManage = isManagerOrAdmin();
   table.innerHTML = `
-    <tr><th>Name</th><th>Role</th><th>Open tasks</th>${canManage ? "<th>Actions</th>" : ""}</tr>
+    <tr><th>Name</th><th>Role</th><th>Open tasks</th><th>Actions</th></tr>
     ${state.users.map(u => {
       const openCount = tasks.filter(t => t.assigned_to === u.id && !t.complete).length;
-      const actions = canManage
-        ? `<td><button class="icon-btn" onclick="openUserModal(${u.id})">Edit</button><button class="icon-btn danger" onclick="deleteUser(${u.id})">Delete</button></td>`
-        : "";
-      return `<tr><td>${u.name}</td><td><span class="role-pill">${u.role}</span></td><td>${openCount}</td>${actions}</tr>`;
+      const isSelf = state.currentUser?.id === u.id;
+      const actionBtns = [
+        isSelf ? `<button class="icon-btn" onclick="openOwnPinModal()">Change my PIN</button>` : "",
+        canManage ? `<button class="icon-btn" onclick="openUserModal(${u.id})">Edit</button>` : "",
+        canManage ? `<button class="icon-btn danger" onclick="deleteUser(${u.id})">Delete</button>` : "",
+      ].filter(Boolean).join("");
+      return `<tr><td>${u.name}</td><td><span class="role-pill">${u.role}</span></td><td>${openCount}</td><td>${actionBtns || "—"}</td></tr>`;
     }).join("")}
   `;
 }
@@ -1737,7 +1917,7 @@ async function saveUserEdit(){
   const role = document.getElementById("edit-user-role").value;
   const newPin = document.getElementById("edit-user-pin").value.trim();
   if (!name){ alert("Name is required."); return; }
-  if (newPin && !/^\d{4}$/.test(newPin)){ alert("PIN must be exactly 4 digits."); return; }
+  if (newPin && !isPinValid(newPin)){ alert("PIN must be at least 4 characters (letters/numbers)."); return; }
   if (!supabaseClient){ alert("Supabase isn't configured."); return; }
 
   const { error } = await supabaseClient.from("users").update({ name, role }).eq("id", id);
@@ -1772,6 +1952,36 @@ async function deleteUser(userIdArg){
   closeUserModal();
   renderDirectory();
   renderKanban();
+}
+
+/* ---------- Team: change my own PIN (self-service, no re-auth) ---------- */
+function openOwnPinModal(){
+  document.getElementById("own-pin-new").value = "";
+  document.getElementById("own-pin-confirm").value = "";
+  document.getElementById("own-pin-error").textContent = "";
+  document.getElementById("own-pin-modal-backdrop").classList.add("active");
+}
+function closeOwnPinModal(){
+  document.getElementById("own-pin-modal-backdrop").classList.remove("active");
+}
+async function saveOwnPin(){
+  const newPin = document.getElementById("own-pin-new").value.trim();
+  const confirmPin = document.getElementById("own-pin-confirm").value.trim();
+  const errEl = document.getElementById("own-pin-error");
+  errEl.textContent = "";
+
+  if (!isPinValid(newPin)){ errEl.textContent = "PIN must be at least 4 characters (letters/numbers)."; return; }
+  if (newPin !== confirmPin){ errEl.textContent = "PINs don't match."; return; }
+  if (!supabaseClient){ errEl.textContent = "Supabase isn't configured."; return; }
+
+  const { error } = await supabaseClient.rpc("update_user_pin", {
+    p_user_id: state.currentUser.id,
+    p_new_pin: newPin,
+  });
+  if (error){ errEl.textContent = "Couldn't update PIN: " + error.message; return; }
+
+  closeOwnPinModal();
+  alert("Your PIN has been updated.");
 }
 
 /* ============================================================
