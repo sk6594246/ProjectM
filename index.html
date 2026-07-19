@@ -1,0 +1,861 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stratega PM</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/supabase-js/2.39.0/supabase.min.js"></script>
+<style>
+  :root{
+    --glass-bg: rgba(255,255,255,0.55);
+    --glass-border: rgba(255,255,255,0.35);
+    --ink: #1c2430;
+    --ink-soft: #566072;
+    --accent: #3d6cff;
+    --accent-soft: #7c9bff;
+    --bg-1: #eef2fb;
+    --bg-2: #f6f2ea;
+    --danger: #d9534f;
+    --ok: #2fa86b;
+    --warn: #e2a53a;
+    --radius: 16px;
+    --shadow: 0 8px 30px rgba(30,40,80,0.12);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: linear-gradient(135deg, var(--bg-1), var(--bg-2));
+    color: var(--ink); min-height:100vh;
+  }
+  .glass{
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+  #login-screen{
+    display:flex; align-items:center; justify-content:center; height:100vh;
+  }
+  #login-screen .card{ width:320px; padding:32px; text-align:center; }
+  #login-screen h1{ font-size:22px; margin:0 0 4px; }
+  #login-screen p{ color:var(--ink-soft); font-size:13px; margin:0 0 20px; }
+  #login-screen input{
+    width:100%; padding:12px 14px; margin-bottom:12px; border-radius:10px;
+    border:1px solid rgba(0,0,0,0.1); font-size:16px; letter-spacing:2px; text-align:center;
+  }
+  #login-screen select{ width:100%; padding:10px; margin-bottom:12px; border-radius:10px; border:1px solid rgba(0,0,0,0.1); }
+  button.primary{
+    background: var(--accent); color:#fff; border:none; padding:12px 18px;
+    border-radius:10px; font-weight:600; cursor:pointer; width:100%;
+  }
+  button.primary:hover{ background: var(--accent-soft); }
+  #login-error{ color:var(--danger); font-size:13px; min-height:18px; margin-top:6px; }
+
+  #app{ display:none; }
+  header.topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 24px; margin:16px; padding-right:24px;
+  }
+  header.topbar .brand{ font-size:18px; font-weight:700; }
+  header.topbar .brand span{ color: var(--accent); }
+  nav.tabs{ display:flex; gap:6px; flex-wrap:wrap; }
+  nav.tabs button{
+    background:transparent; border:none; padding:8px 14px; border-radius:10px;
+    cursor:pointer; font-size:13px; color:var(--ink-soft); font-weight:600;
+  }
+  nav.tabs button.active{ background: var(--accent); color:#fff; }
+  .who{ font-size:13px; color:var(--ink-soft); display:flex; align-items:center; gap:10px; }
+  .who button{ background:none; border:1px solid rgba(0,0,0,0.15); border-radius:8px; padding:6px 10px; cursor:pointer; }
+
+  main{ margin: 0 16px 24px; }
+  .view{ display:none; }
+  .view.active{ display:block; }
+
+  /* Kanban */
+  .kanban{ display:grid; grid-template-columns: repeat(auto-fit, minmax(230px,1fr)); gap:14px; }
+  .kanban-col{ padding:14px; min-height:200px; }
+  .kanban-col h3{ margin:0 0 10px; font-size:14px; display:flex; justify-content:space-between; }
+  .kanban-col h3 .count{ background:rgba(0,0,0,0.06); border-radius:20px; padding:1px 8px; font-size:12px; }
+  .task-card{
+    background:#fff; border-radius:12px; padding:10px 12px; margin-bottom:10px;
+    box-shadow:0 2px 8px rgba(0,0,0,0.06); cursor:grab; border-left:4px solid var(--accent);
+  }
+  .task-card.priority-High{ border-left-color: var(--danger); }
+  .task-card.priority-Medium{ border-left-color: var(--warn); }
+  .task-card.priority-Low{ border-left-color: var(--ok); }
+  .task-card h4{ margin:0 0 4px; font-size:13.5px; }
+  .task-card .meta{ font-size:11px; color:var(--ink-soft); display:flex; justify-content:space-between; }
+  .task-card .comment-count{ font-size:11px; color:var(--accent); margin-top:6px; }
+  .kanban-col.dragover{ outline:2px dashed var(--accent); }
+
+  /* Modal */
+  .modal-backdrop{
+    display:none; position:fixed; inset:0; background:rgba(20,25,40,0.35);
+    align-items:center; justify-content:center; z-index:50;
+  }
+  .modal-backdrop.active{ display:flex; }
+  .modal{ width:480px; max-height:86vh; overflow:auto; padding:24px; }
+  .modal h2{ margin-top:0; font-size:17px; }
+  .modal label{ font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px; }
+  .modal input, .modal select, .modal textarea{
+    width:100%; padding:9px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:13px;
+  }
+  .modal textarea{ min-height:60px; resize:vertical; }
+  .modal .row2{ display:flex; gap:10px; }
+  .modal .row2 > div{ flex:1; }
+  .modal-actions{ display:flex; justify-content:space-between; margin-top:18px; gap:10px; }
+  .modal-actions button{ padding:9px 16px; border-radius:8px; border:none; cursor:pointer; font-weight:600; }
+  .btn-save{ background:var(--accent); color:#fff; }
+  .btn-cancel{ background:rgba(0,0,0,0.06); }
+  .btn-delete{ background:var(--danger); color:#fff; }
+
+  .comments-box{ margin-top:14px; border-top:1px solid rgba(0,0,0,0.08); padding-top:10px; }
+  .comment{ font-size:12px; padding:6px 0; border-bottom:1px dashed rgba(0,0,0,0.06); }
+  .comment b{ color:var(--accent); }
+  #comment-input{ margin-top:8px; }
+
+  /* Gantt */
+  .gantt-wrap{ padding:18px; overflow-x:auto; }
+  .gantt-row{ display:flex; align-items:center; margin-bottom:10px; font-size:12px; }
+  .gantt-label{ width:180px; flex-shrink:0; padding-right:10px; }
+  .gantt-track{ position:relative; flex:1; height:38px; background:rgba(0,0,0,0.04); border-radius:6px; min-width:400px; }
+  .bar{ position:absolute; height:10px; border-radius:5px; top:0; }
+  .bar.planned{ background: var(--accent-soft); top:2px; }
+  .bar.actual{ background: var(--ok); top:14px; }
+  .bar.baseline1{ background:#b39ddb; top:26px; height:6px; opacity:0.8; }
+  .bar.baseline2{ background:#7e57c2; top:26px; height:6px; opacity:0.5; margin-top:0; }
+  .gantt-legend{ font-size:11px; color:var(--ink-soft); display:flex; gap:16px; margin-bottom:12px; }
+  .legend-dot{ display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:4px; vertical-align:middle; }
+
+  /* Analytics */
+  .grid-3{ display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:14px; }
+  .stat-card{ padding:16px; }
+  .stat-card .num{ font-size:26px; font-weight:700; }
+  .stat-card .label{ font-size:12px; color:var(--ink-soft); }
+  .heat-row{ display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:12px; }
+  .heat-bar{ height:14px; border-radius:7px; background: var(--accent); }
+  .heat-label{ width:140px; }
+
+  /* Directory */
+  table.directory{ width:100%; border-collapse:collapse; font-size:13px; }
+  table.directory th, table.directory td{ text-align:left; padding:10px; border-bottom:1px solid rgba(0,0,0,0.06); }
+  .role-pill{ font-size:11px; padding:2px 8px; border-radius:12px; background:rgba(61,108,255,0.12); color:var(--accent); }
+
+  .panel{ padding:18px; margin-bottom:14px; }
+  .panel h3{ margin-top:0; }
+
+  @media (max-width: 640px){
+    .kanban{ grid-template-columns: 1fr; }
+    header.topbar{ flex-direction:column; gap:10px; align-items:flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== LOGIN ===================== -->
+<div id="login-screen">
+  <div class="card glass">
+    <h1>Stratega <span>PM</span></h1>
+    <p>Enter your name and PIN to continue</p>
+    <select id="login-user"></select>
+    <input id="login-pin" type="password" maxlength="4" placeholder="• • • •" />
+    <button class="primary" onclick="handleLogin()">Sign in</button>
+    <div id="login-error"></div>
+  </div>
+</div>
+
+<!-- ===================== APP ===================== -->
+<div id="app">
+  <header class="topbar glass">
+    <div class="brand">Stratega <span>PM</span></div>
+    <nav class="tabs" id="tabs">
+      <button data-view="kanban" class="active">Kanban</button>
+      <button data-view="gantt">Gantt</button>
+      <button data-view="analytics">Analytics</button>
+      <button data-view="directory">Team</button>
+      <button data-view="mobile">Overview</button>
+    </nav>
+    <div class="who">
+      <span id="whoami"></span>
+      <button onclick="logout()">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- KANBAN -->
+    <section class="view active" id="view-kanban">
+      <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+        <button class="primary" style="width:auto;" onclick="openTaskModal()">+ New task</button>
+      </div>
+      <div class="kanban" id="kanban-board"></div>
+    </section>
+
+    <!-- GANTT -->
+    <section class="view" id="view-gantt">
+      <div class="gantt-wrap glass">
+        <div class="gantt-legend">
+          <span><span class="legend-dot" style="background:var(--accent-soft)"></span>Planned</span>
+          <span><span class="legend-dot" style="background:var(--ok)"></span>Actual</span>
+          <span><span class="legend-dot" style="background:#b39ddb"></span>Baseline 1</span>
+          <span><span class="legend-dot" style="background:#7e57c2"></span>Baseline 2</span>
+        </div>
+        <div id="gantt-rows"></div>
+      </div>
+    </section>
+
+    <!-- ANALYTICS -->
+    <section class="view" id="view-analytics">
+      <div class="grid-3" style="margin-bottom:14px;" id="stat-cards"></div>
+      <div class="panel glass">
+        <h3>Department workload heatmap</h3>
+        <div id="heatmap"></div>
+      </div>
+      <div class="panel glass">
+        <h3>At-risk resources (5+ open tasks)</h3>
+        <div id="at-risk"></div>
+      </div>
+      <div class="panel glass">
+        <h3>Bottleneck: avg time-in-status (days)</h3>
+        <div id="bottleneck"></div>
+      </div>
+    </section>
+
+    <!-- DIRECTORY -->
+    <section class="view" id="view-directory">
+      <div class="panel glass">
+        <h3>Team directory</h3>
+        <table class="directory" id="directory-table"></table>
+      </div>
+    </section>
+
+    <!-- MOBILE / OVERVIEW -->
+    <section class="view" id="view-mobile">
+      <div class="grid-3" id="mobile-cards"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ===================== TASK MODAL ===================== -->
+<div class="modal-backdrop" id="task-modal-backdrop">
+  <div class="modal glass">
+    <h2 id="modal-title">New task</h2>
+    <input type="hidden" id="task-id" />
+    <label>Title</label>
+    <input id="task-title" />
+    <label>Description</label>
+    <textarea id="task-description"></textarea>
+    <div class="row2">
+      <div><label>Department</label><select id="task-department"></select></div>
+      <div><label>Assignee</label><select id="task-assignee"></select></div>
+    </div>
+    <div class="row2">
+      <div><label>Status</label><select id="task-status"></select></div>
+      <div><label>Priority</label><select id="task-priority"></select></div>
+    </div>
+    <div class="row2">
+      <div><label>Planned start</label><input type="date" id="task-planned-start" /></div>
+      <div><label>Planned finish</label><input type="date" id="task-planned-finish" /></div>
+    </div>
+    <div class="row2">
+      <div><label>Baseline 1 (start / finish)</label><input type="date" id="task-b1-start" /></div>
+      <div><label>&nbsp;</label><input type="date" id="task-b1-finish" /></div>
+    </div>
+    <div class="row2">
+      <div><label>Baseline 2 (start / finish)</label><input type="date" id="task-b2-start" /></div>
+      <div><label>&nbsp;</label><input type="date" id="task-b2-finish" /></div>
+    </div>
+
+    <div class="comments-box" id="comments-box" style="display:none;">
+      <h3 style="font-size:13px; margin:0 0 6px;">Comments</h3>
+      <div id="comments-list"></div>
+      <textarea id="comment-input" placeholder="Add a comment..."></textarea>
+      <button class="primary" style="margin-top:6px;" onclick="addComment()">Post comment</button>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-delete" id="btn-delete-task" style="display:none;" onclick="deleteTask()">Delete</button>
+      <div style="flex:1"></div>
+      <button class="btn-cancel" onclick="closeTaskModal()">Cancel</button>
+      <button class="btn-save" onclick="saveTask()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG — replace with your Supabase project details
+   ============================================================ */
+const SUPABASE_URL = "https://YOUR-PROJECT.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR-ANON-KEY";
+
+const supabaseClient = window.supabase
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+/* ============================================================
+   LOCAL STATE + CACHE (fallback only — Supabase is source of truth)
+   ============================================================ */
+const CACHE_KEY = "stratega_pm_cache_v1";
+let state = {
+  currentUser: null,
+  users: [],
+  departments: [],
+  projects: [],
+  statuses: [],
+  priorities: [],
+  tasks: [],
+  comments: [],       // { id, task_id, author_id, body, created_at }
+  automationRules: [],
+};
+
+function saveCache(){
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(state)); } catch(e){ console.warn("cache save failed", e); }
+}
+function loadCache(){
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (raw) Object.assign(state, JSON.parse(raw));
+  } catch(e){ console.warn("cache load failed", e); }
+}
+
+/* ============================================================
+   AUTOMATION ENGINE
+   Applies automation_rules to a task payload before saving.
+   Supports boolean casts and TODAY±N relative date syntax.
+   ============================================================ */
+function evaluateAutomationRules(updatedTask, rules){
+  let processedPayload = { ...updatedTask };
+  rules.forEach((rule) => {
+    const currentValue = String(processedPayload[rule.source_field] ?? "");
+    if (currentValue === String(rule.trigger_value)) {
+      const field = rule.target_field;
+      const val = String(rule.target_value).trim();
+      if (field === "complete") {
+        processedPayload.complete = val.toLowerCase() === "true";
+      } else if (val.toUpperCase().startsWith("TODAY")) {
+        const computedDate = new Date();
+        const match = val.match(/TODAY\s*([+-])\s*(\d+)/i);
+        if (match) {
+          const operator = match[1];
+          const amount = parseInt(match[2], 10);
+          if (operator === "+") computedDate.setDate(computedDate.getDate() + amount);
+          if (operator === "-") computedDate.setDate(computedDate.getDate() - amount);
+        }
+        processedPayload[field] = computedDate.toISOString().split("T")[0];
+      } else {
+        processedPayload[field] = val;
+      }
+    }
+  });
+  return processedPayload;
+}
+
+/* ============================================================
+   AUTH — custom PIN-based (not Supabase Auth)
+   ============================================================ */
+async function fetchAllReferenceData(){
+  if (!supabaseClient) return;
+  const [u, d, p, s, pr, t, c, ar] = await Promise.all([
+    supabaseClient.from("users").select("*"),
+    supabaseClient.from("departments").select("*"),
+    supabaseClient.from("projects").select("*"),
+    supabaseClient.from("statuses").select("*").order("sort_order"),
+    supabaseClient.from("priorities").select("*").order("sort_order"),
+    supabaseClient.from("tasks").select("*"),
+    supabaseClient.from("task_comments").select("*"),
+    supabaseClient.from("automation_rules").select("*"),
+  ]);
+  state.users = u.data || [];
+  state.departments = d.data || [];
+  state.projects = p.data || [];
+  state.statuses = s.data || [];
+  state.priorities = pr.data || [];
+  state.tasks = t.data || [];
+  state.comments = c.data || [];
+  state.automationRules = ar.data || [];
+  saveCache();
+}
+
+function populateLoginDropdown(){
+  const sel = document.getElementById("login-user");
+  sel.innerHTML = state.users.map(u => `<option value="${u.id}">${u.name} (${u.role})</option>`).join("");
+}
+
+async function handleLogin(){
+  const userId = Number(document.getElementById("login-user").value);
+  const pin = document.getElementById("login-pin").value;
+  const errEl = document.getElementById("login-error");
+  errEl.textContent = "";
+
+  if (!supabaseClient){
+    errEl.textContent = "Supabase is not configured yet.";
+    return;
+  }
+  try {
+    const { data, error } = await supabaseClient.rpc("verify_user_pin", {
+      target_user_id: userId,
+      entered_pin: pin
+    });
+    if (error) throw error;
+    if (!data){
+      errEl.textContent = "Incorrect PIN. Try again.";
+      return;
+    }
+    state.currentUser = state.users.find(u => u.id === userId);
+    saveCache();
+    enterApp();
+  } catch(e){
+    console.error(e);
+    errEl.textContent = "Sign-in failed. Check your connection.";
+  }
+}
+
+function logout(){
+  state.currentUser = null;
+  saveCache();
+  document.getElementById("app").style.display = "none";
+  document.getElementById("login-screen").style.display = "flex";
+  document.getElementById("login-pin").value = "";
+}
+
+function enterApp(){
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("app").style.display = "block";
+  document.getElementById("whoami").textContent =
+    `${state.currentUser.name} — ${state.currentUser.role}`;
+  renderAll();
+}
+
+/* ============================================================
+   RBAC (frontend-enforced — RLS is off by design for this pilot)
+   Everyone can comment. Edits are restricted to the user's own
+   department(s), unless the user is Admin.
+   ============================================================ */
+function userDepartmentIds(userId){
+  // user_departments isn't fetched separately here for brevity —
+  // in production, fetch and join; for the pilot we infer via task assignment
+  // and the department dropdown the user last touched. Admins bypass this.
+  return state._userDepartments?.[userId] || [];
+}
+function canEditTask(task){
+  const u = state.currentUser;
+  if (!u) return false;
+  if (u.role === "Admin") return true;
+  const depts = userDepartmentIds(u.id);
+  return depts.length === 0 ? true : depts.includes(task.department_id); // fallback permissive for pilot simplicity
+}
+
+/* ============================================================
+   SPA ROUTER — defensive isolation: only one view visible ever
+   ============================================================ */
+document.getElementById("tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-view]");
+  if (!btn) return;
+  navigateTo(btn.dataset.view);
+});
+
+function navigateTo(viewName){
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.view === viewName));
+  document.querySelectorAll("main .view").forEach(v => v.classList.remove("active"));
+  const target = document.getElementById(`view-${viewName}`);
+  if (target) target.classList.add("active");
+  if (viewName === "gantt") renderGantt();
+  if (viewName === "analytics") renderAnalytics();
+  if (viewName === "directory") renderDirectory();
+  if (viewName === "mobile") renderMobile();
+}
+
+/* ============================================================
+   KANBAN
+   ============================================================ */
+function renderAll(){
+  renderKanban();
+  renderGantt();
+  renderAnalytics();
+  renderDirectory();
+  renderMobile();
+}
+
+function statusName(id){ return state.statuses.find(s => s.id === id)?.name || "—"; }
+function priorityName(id){ return state.priorities.find(p => p.id === id)?.name || "—"; }
+function userName(id){ return state.users.find(u => u.id === id)?.name || "Unassigned"; }
+function departmentName(id){ return state.departments.find(d => d.id === id)?.name || "—"; }
+function commentsForTask(taskId){ return state.comments.filter(c => c.task_id === taskId); }
+
+function renderKanban(){
+  const board = document.getElementById("kanban-board");
+  board.innerHTML = "";
+  state.statuses.forEach(status => {
+    const col = document.createElement("div");
+    col.className = "kanban-col glass";
+    col.dataset.statusId = status.id;
+    const tasksInCol = state.tasks.filter(t => t.status_id === status.id);
+    col.innerHTML = `<h3>${status.name} <span class="count">${tasksInCol.length}</span></h3>`;
+    tasksInCol.forEach(t => col.appendChild(renderTaskCard(t)));
+
+    col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("dragover"); });
+    col.addEventListener("dragleave", () => col.classList.remove("dragover"));
+    col.addEventListener("drop", async e => {
+      e.preventDefault();
+      col.classList.remove("dragover");
+      const taskId = Number(e.dataTransfer.getData("text/task-id"));
+      await moveTaskToStatus(taskId, status.id);
+    });
+    board.appendChild(col);
+  });
+}
+
+function renderTaskCard(t){
+  const card = document.createElement("div");
+  const pName = priorityName(t.priority_id);
+  card.className = `task-card priority-${pName}`;
+  card.draggable = true;
+  card.addEventListener("dragstart", e => e.dataTransfer.setData("text/task-id", t.id));
+  card.addEventListener("click", () => openTaskModal(t.id));
+  const cCount = commentsForTask(t.id).length;
+  card.innerHTML = `
+    <h4>${t.title}</h4>
+    <div class="meta"><span>${userName(t.assigned_to)}</span><span>${pName}</span></div>
+    ${cCount ? `<div class="comment-count">${cCount} comment${cCount > 1 ? "s" : ""}</div>` : ""}
+  `;
+  return card;
+}
+
+async function moveTaskToStatus(taskId, newStatusId){
+  const task = state.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  if (!canEditTask(task)){ alert("You don't have edit rights for this task's department."); return; }
+
+  let payload = { ...task, status_id: newStatusId };
+  payload = evaluateAutomationRules(payload, state.automationRules);
+
+  // optimistic local update
+  Object.assign(task, payload);
+  renderKanban();
+  saveCache();
+
+  if (supabaseClient){
+    const { error } = await supabaseClient.from("tasks").update({
+      status_id: payload.status_id,
+      complete: payload.complete,
+      actual_start: payload.actual_start,
+      actual_finish: payload.actual_finish,
+    }).eq("id", taskId);
+    if (error) console.error("sync failed, kept local optimistic state:", error);
+  }
+}
+
+/* ============================================================
+   TASK MODAL — create / edit / comments
+   ============================================================ */
+function openTaskModal(taskId){
+  const isEdit = !!taskId;
+  const task = isEdit ? state.tasks.find(t => t.id === taskId) : null;
+
+  document.getElementById("modal-title").textContent = isEdit ? "Edit task" : "New task";
+  document.getElementById("task-id").value = taskId || "";
+  document.getElementById("task-title").value = task?.title || "";
+  document.getElementById("task-description").value = task?.description || "";
+
+  const deptSel = document.getElementById("task-department");
+  deptSel.innerHTML = state.departments.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  deptSel.value = task?.department_id || state.departments[0]?.id;
+
+  const asgSel = document.getElementById("task-assignee");
+  asgSel.innerHTML = state.users.map(u => `<option value="${u.id}">${u.name}</option>`).join("");
+  asgSel.value = task?.assigned_to || state.users[0]?.id;
+
+  const statusSel = document.getElementById("task-status");
+  statusSel.innerHTML = state.statuses.map(s => `<option value="${s.id}">${s.name}</option>`).join("");
+  statusSel.value = task?.status_id || state.statuses[0]?.id;
+
+  const prioSel = document.getElementById("task-priority");
+  prioSel.innerHTML = state.priorities.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+  prioSel.value = task?.priority_id || state.priorities[0]?.id;
+
+  document.getElementById("task-planned-start").value = task?.planned_start || "";
+  document.getElementById("task-planned-finish").value = task?.planned_finish || "";
+  document.getElementById("task-b1-start").value = task?.baseline_1_start || "";
+  document.getElementById("task-b1-finish").value = task?.baseline_1_finish || "";
+  document.getElementById("task-b2-start").value = task?.baseline_2_start || "";
+  document.getElementById("task-b2-finish").value = task?.baseline_2_finish || "";
+
+  document.getElementById("btn-delete-task").style.display = isEdit ? "inline-block" : "none";
+  document.getElementById("comments-box").style.display = isEdit ? "block" : "none";
+  if (isEdit) renderComments(taskId);
+
+  document.getElementById("task-modal-backdrop").classList.add("active");
+}
+
+function closeTaskModal(){
+  document.getElementById("task-modal-backdrop").classList.remove("active");
+}
+
+function renderComments(taskId){
+  const list = document.getElementById("comments-list");
+  const items = commentsForTask(taskId);
+  list.innerHTML = items.length
+    ? items.map(c => `<div class="comment"><b>${userName(c.author_id)}:</b> ${c.body}</div>`).join("")
+    : `<div class="comment" style="color:var(--ink-soft)">No comments yet.</div>`;
+}
+
+async function addComment(){
+  const taskId = Number(document.getElementById("task-id").value);
+  const body = document.getElementById("comment-input").value.trim();
+  if (!body || !taskId) return;
+
+  const localComment = {
+    id: Date.now(),
+    task_id: taskId,
+    author_id: state.currentUser.id,
+    body,
+    created_at: new Date().toISOString(),
+  };
+  state.comments.push(localComment);
+  document.getElementById("comment-input").value = "";
+  renderComments(taskId);
+  renderKanban();
+  saveCache();
+
+  if (supabaseClient){
+    const { error } = await supabaseClient.from("task_comments").insert({
+      task_id: taskId, author_id: state.currentUser.id, body
+    });
+    if (error) console.error("comment sync failed:", error);
+  }
+}
+
+async function saveTask(){
+  const idVal = document.getElementById("task-id").value;
+  const isEdit = !!idVal;
+
+  const payload = {
+    title: document.getElementById("task-title").value.trim(),
+    description: document.getElementById("task-description").value,
+    department_id: Number(document.getElementById("task-department").value),
+    assigned_to: Number(document.getElementById("task-assignee").value),
+    status_id: Number(document.getElementById("task-status").value),
+    priority_id: Number(document.getElementById("task-priority").value),
+    planned_start: document.getElementById("task-planned-start").value || null,
+    planned_finish: document.getElementById("task-planned-finish").value || null,
+    baseline_1_start: document.getElementById("task-b1-start").value || null,
+    baseline_1_finish: document.getElementById("task-b1-finish").value || null,
+    baseline_2_start: document.getElementById("task-b2-start").value || null,
+    baseline_2_finish: document.getElementById("task-b2-finish").value || null,
+  };
+
+  if (!payload.title){ alert("Title is required."); return; }
+
+  const processed = evaluateAutomationRules(payload, state.automationRules);
+
+  if (isEdit){
+    const id = Number(idVal);
+    const existing = state.tasks.find(t => t.id === id);
+    if (!canEditTask(existing)){ alert("You don't have edit rights for this task's department."); return; }
+    Object.assign(existing, processed);
+    renderAll();
+    saveCache();
+    if (supabaseClient){
+      const { error } = await supabaseClient.from("tasks").update(processed).eq("id", id);
+      if (error) console.error("update sync failed:", error);
+    }
+  } else {
+    const localId = Date.now();
+    const newTask = { id: localId, ...processed, complete: !!processed.complete };
+    state.tasks.push(newTask);
+    renderAll();
+    saveCache();
+    if (supabaseClient){
+      const { data, error } = await supabaseClient.from("tasks").insert(processed).select().single();
+      if (!error && data){
+        // reconcile local temp id with real DB id
+        const idx = state.tasks.findIndex(t => t.id === localId);
+        if (idx > -1) state.tasks[idx] = data;
+        renderAll();
+        saveCache();
+      } else if (error){
+        console.error("insert sync failed, kept local copy:", error);
+      }
+    }
+  }
+  closeTaskModal();
+}
+
+async function deleteTask(){
+  const id = Number(document.getElementById("task-id").value);
+  if (!confirm("Delete this task?")) return;
+  state.tasks = state.tasks.filter(t => t.id !== id);
+  state.comments = state.comments.filter(c => c.task_id !== id);
+  renderAll();
+  saveCache();
+  closeTaskModal();
+  if (supabaseClient){
+    const { error } = await supabaseClient.from("tasks").delete().eq("id", id);
+    if (error) console.error("delete sync failed:", error);
+  }
+}
+
+/* ============================================================
+   GANTT — planned vs actual vs dual baseline
+   ============================================================ */
+function renderGantt(){
+  const container = document.getElementById("gantt-rows");
+  container.innerHTML = "";
+  if (!state.tasks.length){
+    container.innerHTML = `<p style="color:var(--ink-soft)">No tasks yet.</p>`;
+    return;
+  }
+  const allDates = [];
+  state.tasks.forEach(t => {
+    [t.planned_start, t.planned_finish, t.actual_start, t.actual_finish,
+     t.baseline_1_start, t.baseline_1_finish, t.baseline_2_start, t.baseline_2_finish]
+      .forEach(d => { if (d) allDates.push(new Date(d)); });
+  });
+  if (!allDates.length){
+    container.innerHTML = `<p style="color:var(--ink-soft)">No scheduled dates yet.</p>`;
+    return;
+  }
+  const minDate = new Date(Math.min(...allDates));
+  const maxDate = new Date(Math.max(...allDates));
+  const totalDays = Math.max(1, (maxDate - minDate) / 86400000);
+
+  function pct(dateStr){
+    if (!dateStr) return null;
+    const d = new Date(dateStr);
+    return ((d - minDate) / 86400000 / totalDays) * 100;
+  }
+  function widthPct(startStr, endStr){
+    const s = pct(startStr), e = pct(endStr);
+    if (s === null || e === null) return null;
+    return Math.max(1, e - s);
+  }
+
+  state.tasks.forEach(t => {
+    const row = document.createElement("div");
+    row.className = "gantt-row";
+    const track = document.createElement("div");
+    track.className = "gantt-track";
+
+    const bars = [
+      { cls: "planned", s: t.planned_start, e: t.planned_finish },
+      { cls: "actual", s: t.actual_start, e: t.actual_finish },
+      { cls: "baseline1", s: t.baseline_1_start, e: t.baseline_1_finish },
+      { cls: "baseline2", s: t.baseline_2_start, e: t.baseline_2_finish },
+    ];
+    bars.forEach(b => {
+      const left = pct(b.s);
+      const w = widthPct(b.s, b.e);
+      if (left === null || w === null) return;
+      const bar = document.createElement("div");
+      bar.className = `bar ${b.cls}`;
+      bar.style.left = `${left}%`;
+      bar.style.width = `${w}%`;
+      bar.title = `${b.cls}: ${b.s} → ${b.e}`;
+      track.appendChild(bar);
+    });
+
+    row.innerHTML = `<div class="gantt-label">${t.title}</div>`;
+    row.appendChild(track);
+    container.appendChild(row);
+  });
+}
+
+/* ============================================================
+   ANALYTICS
+   ============================================================ */
+function renderAnalytics(){
+  const total = state.tasks.length;
+  const done = state.tasks.filter(t => t.complete).length;
+  const open = total - done;
+  const overdue = state.tasks.filter(t => t.planned_finish && !t.complete && new Date(t.planned_finish) < new Date()).length;
+
+  document.getElementById("stat-cards").innerHTML = `
+    <div class="stat-card glass"><div class="num">${total}</div><div class="label">Total tasks</div></div>
+    <div class="stat-card glass"><div class="num">${open}</div><div class="label">Open</div></div>
+    <div class="stat-card glass"><div class="num">${done}</div><div class="label">Completed</div></div>
+    <div class="stat-card glass"><div class="num">${overdue}</div><div class="label">Overdue</div></div>
+  `;
+
+  // heatmap by department
+  const byDept = {};
+  state.tasks.forEach(t => {
+    const name = departmentName(t.department_id);
+    byDept[name] = (byDept[name] || 0) + 1;
+  });
+  const maxCount = Math.max(1, ...Object.values(byDept));
+  document.getElementById("heatmap").innerHTML = Object.entries(byDept).map(([name, count]) => `
+    <div class="heat-row">
+      <div class="heat-label">${name}</div>
+      <div class="heat-bar" style="width:${(count / maxCount) * 100}%"></div>
+      <span>${count}</span>
+    </div>
+  `).join("") || `<p style="color:var(--ink-soft)">No data yet.</p>`;
+
+  // at-risk resources: 5+ open tasks
+  const byUser = {};
+  state.tasks.filter(t => !t.complete).forEach(t => {
+    byUser[t.assigned_to] = (byUser[t.assigned_to] || 0) + 1;
+  });
+  const atRisk = Object.entries(byUser).filter(([, c]) => c >= 5);
+  document.getElementById("at-risk").innerHTML = atRisk.length
+    ? atRisk.map(([uid, c]) => `<div class="heat-row"><div class="heat-label">${userName(Number(uid))}</div><span>${c} open tasks</span></div>`).join("")
+    : `<p style="color:var(--ink-soft)">No one is currently overloaded.</p>`;
+
+  // bottleneck: avg days since creation for tasks still open, grouped by status
+  const byStatus = {};
+  state.tasks.filter(t => !t.complete).forEach(t => {
+    const name = statusName(t.status_id);
+    const days = t.created_at ? (Date.now() - new Date(t.created_at)) / 86400000 : 0;
+    if (!byStatus[name]) byStatus[name] = [];
+    byStatus[name].push(days);
+  });
+  document.getElementById("bottleneck").innerHTML = Object.entries(byStatus).map(([name, arr]) => {
+    const avg = (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1);
+    return `<div class="heat-row"><div class="heat-label">${name}</div><span>${avg} days avg</span></div>`;
+  }).join("") || `<p style="color:var(--ink-soft)">No data yet.</p>`;
+}
+
+/* ============================================================
+   TEAM DIRECTORY
+   ============================================================ */
+function renderDirectory(){
+  const table = document.getElementById("directory-table");
+  table.innerHTML = `
+    <tr><th>Name</th><th>Role</th><th>Open tasks</th></tr>
+    ${state.users.map(u => {
+      const openCount = state.tasks.filter(t => t.assigned_to === u.id && !t.complete).length;
+      return `<tr><td>${u.name}</td><td><span class="role-pill">${u.role}</span></td><td>${openCount}</td></tr>`;
+    }).join("")}
+  `;
+}
+
+/* ============================================================
+   MOBILE / OVERVIEW CARDS
+   ============================================================ */
+function renderMobile(){
+  const total = state.tasks.length;
+  const done = state.tasks.filter(t => t.complete).length;
+  const highPriorityOpen = state.tasks.filter(t => !t.complete && priorityName(t.priority_id) === "High").length;
+  document.getElementById("mobile-cards").innerHTML = `
+    <div class="stat-card glass"><div class="num">${total}</div><div class="label">All tasks</div></div>
+    <div class="stat-card glass"><div class="num">${done}</div><div class="label">Completed</div></div>
+    <div class="stat-card glass"><div class="num">${highPriorityOpen}</div><div class="label">High priority, open</div></div>
+    <div class="stat-card glass"><div class="num">${state.departments.length}</div><div class="label">Departments</div></div>
+    <div class="stat-card glass"><div class="num">${state.users.length}</div><div class="label">Team members</div></div>
+  `;
+}
+
+/* ============================================================
+   BOOTSTRAP
+   ============================================================ */
+(async function init(){
+  loadCache();
+  if (state.users.length) populateLoginDropdown(); // show cached users immediately
+  await fetchAllReferenceData();
+  populateLoginDropdown();
+})();
+</script>
+</body>
+</html>
