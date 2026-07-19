@@ -190,6 +190,10 @@
   .audit-diff-line .new-val{ color:var(--ok); }
   .audit-action-pill{ font-size:10px; padding:2px 7px; border-radius:10px; background:rgba(61,108,255,0.12); color:var(--accent); font-weight:600; }
 
+  table.assignment-history{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  table.assignment-history th, table.assignment-history td{ text-align:left; padding:7px 10px; border-bottom:1px solid rgba(0,0,0,0.06); }
+  .assignment-history .current-pill{ font-size:10px; padding:1px 7px; border-radius:10px; background:rgba(47,168,107,0.14); color:var(--ok); font-weight:600; margin-left:6px; }
+
   @media (max-width: 640px){
     .kanban{ grid-template-columns: 1fr; }
     header.topbar{ flex-direction:column; gap:10px; align-items:flex-start; }
@@ -309,7 +313,15 @@
         <div class="audit-filters">
           <select id="audit-filter-user"><option value="all">All users</option></select>
           <select id="audit-filter-task"><option value="all">All tasks</option></select>
+          <span id="audit-purge-control" style="display:none; align-items:center; gap:8px;">
+            <span style="width:1px; height:20px; background:rgba(0,0,0,0.12);"></span>
+            <label style="font-size:12px; color:var(--ink-soft); margin:0;">Delete completed-task audit entries older than</label>
+            <input type="number" id="audit-purge-days" min="1" value="90" style="width:70px; padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;" />
+            <label style="font-size:12px; color:var(--ink-soft); margin:0;">days</label>
+            <button class="icon-btn danger" onclick="purgeOldAuditLogs()">Purge</button>
+          </span>
         </div>
+        <div id="assignment-history-panel" style="display:none; margin-bottom:16px;"></div>
         <table class="audit-table" id="audit-table">
           <tr><th>When</th><th>Task</th><th>Action</th><th>Changed by</th><th>What changed</th></tr>
         </table>
@@ -1263,7 +1275,12 @@ async function renderAuditSection(){
   populateAuditFilters();
   const table = document.getElementById("audit-table");
   const emptyMsg = document.getElementById("audit-empty");
+  const historyPanel = document.getElementById("assignment-history-panel");
+  const purgeControl = document.getElementById("audit-purge-control");
+  purgeControl.style.display = isManagerOrAdmin() ? "inline-flex" : "none";
   table.innerHTML = `<tr><th>When</th><th>Task</th><th>Action</th><th>Changed by</th><th>What changed</th></tr>`;
+  historyPanel.style.display = "none";
+  historyPanel.innerHTML = "";
 
   if (!supabaseClient){
     emptyMsg.textContent = "Not available offline.";
@@ -1282,6 +1299,12 @@ async function renderAuditSection(){
     return;
   }
   auditLogCache = data || [];
+
+  // Assignment history is task-specific and should reflect the *whole* history
+  // of that task regardless of the "Changed by" filter, so fetch it separately.
+  if (auditFilters.task !== "all"){
+    await renderAssignmentHistory(Number(auditFilters.task));
+  }
 
   if (!auditLogCache.length){
     emptyMsg.style.display = "block";
@@ -1303,6 +1326,122 @@ async function renderAuditSection(){
       </tr>`;
   }).join("");
   table.insertAdjacentHTML("beforeend", rows);
+}
+
+/* ---------- Assignment history: who held this task, and for how long ---------- */
+function computeAssignmentHistory(entries){
+  const sorted = [...entries].sort((a, b) => new Date(a.changed_at) - new Date(b.changed_at));
+  const segments = [];
+  let currentAssignee = undefined;
+  let segmentStart = null;
+
+  sorted.forEach(entry => {
+    if (entry.action === "INSERT"){
+      currentAssignee = entry.changed_data?.assigned_to ?? null;
+      segmentStart = new Date(entry.changed_at);
+      return;
+    }
+    if (entry.action === "UPDATE"){
+      const oldAssignee = entry.changed_data?.old?.assigned_to ?? null;
+      const newAssignee = entry.changed_data?.new?.assigned_to ?? null;
+      if (String(oldAssignee ?? "") !== String(newAssignee ?? "")){
+        if (segmentStart !== null){
+          segments.push({ assignee: currentAssignee, start: segmentStart, end: new Date(entry.changed_at) });
+        }
+        segmentStart = new Date(entry.changed_at);
+        currentAssignee = newAssignee;
+      }
+      return;
+    }
+    if (entry.action === "DELETE"){
+      if (segmentStart !== null){
+        segments.push({ assignee: currentAssignee, start: segmentStart, end: new Date(entry.changed_at) });
+      }
+      segmentStart = null;
+      currentAssignee = undefined;
+    }
+  });
+
+  // still-open segment runs to "now"
+  if (segmentStart !== null){
+    segments.push({ assignee: currentAssignee, start: segmentStart, end: new Date(), current: true });
+  }
+
+  const totals = {}; // key: assignee id ("unassigned" if null) -> { days, current }
+  segments.forEach(seg => {
+    const days = Math.max(0, Math.round((seg.end - seg.start) / 86400000));
+    const key = seg.assignee === null || seg.assignee === undefined ? "unassigned" : String(seg.assignee);
+    if (!totals[key]) totals[key] = { days: 0, current: false };
+    totals[key].days += days;
+    if (seg.current) totals[key].current = true;
+  });
+  return totals;
+}
+
+async function renderAssignmentHistory(taskId){
+  const panel = document.getElementById("assignment-history-panel");
+  const { data, error } = await supabaseClient
+    .from("audit_logs")
+    .select("*")
+    .eq("table_name", "tasks")
+    .eq("record_id", taskId)
+    .order("changed_at", { ascending: true });
+
+  if (error || !data || !data.length){
+    panel.style.display = "none";
+    return;
+  }
+
+  const totals = computeAssignmentHistory(data);
+  const rows = Object.entries(totals)
+    .sort((a, b) => b[1].days - a[1].days)
+    .map(([key, info]) => {
+      const name = key === "unassigned" ? "Unassigned" : userName(Number(key));
+      return `<tr><td>${name}</td><td>${info.days} day${info.days === 1 ? "" : "s"}${info.current ? `<span class="current-pill">Current</span>` : ""}</td></tr>`;
+    }).join("");
+
+  panel.innerHTML = `
+    <h4 style="font-size:13px; margin:0 0 8px;">Assignment history — who held this task, and for how long</h4>
+    <table class="assignment-history">
+      <tr><th>User</th><th>Total time assigned</th></tr>
+      ${rows}
+    </table>`;
+  panel.style.display = "block";
+}
+
+/* ---------- Admin/Manager: purge old audit entries for completed tasks ---------- */
+async function purgeOldAuditLogs(){
+  if (!isManagerOrAdmin()){ alert("You don't have access to this action."); return; }
+  const daysInput = document.getElementById("audit-purge-days");
+  const days = Number(daysInput.value);
+  if (!days || days < 1){ alert("Enter a valid number of days."); return; }
+  if (!supabaseClient){ alert("Supabase isn't configured."); return; }
+
+  const completeTaskIds = state.tasks.filter(t => t.complete).map(t => t.id);
+  if (!completeTaskIds.length){
+    alert("No completed tasks yet — nothing eligible to purge (audit history for open tasks is never deleted).");
+    return;
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffISO = cutoff.toISOString();
+
+  if (!confirm(`Delete audit trail entries older than ${days} day(s) for completed tasks only? This cannot be undone.`)) return;
+
+  const { data, error } = await supabaseClient
+    .from("audit_logs")
+    .delete()
+    .eq("table_name", "tasks")
+    .in("record_id", completeTaskIds)
+    .lt("changed_at", cutoffISO)
+    .select("id");
+
+  if (error){ alert("Couldn't purge audit logs: " + error.message); return; }
+
+  const count = data?.length || 0;
+  alert(`Purged ${count} audit entr${count === 1 ? "y" : "ies"} older than ${days} day(s) for completed tasks.`);
+  renderAuditSection();
 }
 
 async function saveTask(){
