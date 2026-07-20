@@ -1502,6 +1502,9 @@ const AUDIT_TRACKED_FIELDS = {
 };
 
 function diffHtmlForEntry(entry){
+  if (entry.action === "COMMENT"){
+    return `<span style="white-space:pre-wrap;">${entry.body}</span>`;
+  }
   if (entry.action !== "UPDATE" || !entry.changed_data?.old || !entry.changed_data?.new){
     return `<span style="color:var(--ink-soft)">Task created.</span>`;
   }
@@ -1523,19 +1526,21 @@ async function loadAuditTrail(taskId){
     list.innerHTML = `<div class="comment" style="color:var(--ink-soft)">Not available offline.</div>`;
     return;
   }
-  const { data, error } = await supabaseClient
-    .from("audit_logs")
-    .select("*")
-    .eq("table_name", "tasks")
-    .eq("record_id", taskId)
-    .order("changed_at", { ascending: false })
-    .limit(20);
-  if (error){
+  const [logsRes, commentsRes] = await Promise.all([
+    supabaseClient.from("audit_logs").select("*").eq("table_name", "tasks").eq("record_id", taskId).order("changed_at", { ascending: false }).limit(20),
+    supabaseClient.from("task_comments").select("*").eq("task_id", taskId).order("created_at", { ascending: false }),
+  ]);
+  if (logsRes.error){
     list.innerHTML = `<div class="comment" style="color:var(--danger)">Couldn't load audit trail.</div>`;
     return;
   }
-  list.innerHTML = (data && data.length)
-    ? data.map(entry => `
+  const commentEntries = (commentsRes.data || []).map(c => ({
+    changed_at: c.created_at, record_id: c.task_id, action: "COMMENT", changed_by: c.author_id, body: c.body,
+  }));
+  const merged = [...(logsRes.data || []), ...commentEntries].sort((a, b) => new Date(b.changed_at) - new Date(a.changed_at));
+
+  list.innerHTML = merged.length
+    ? merged.map(entry => `
         <div class="comment">
           <b>${entry.action}</b> — ${new Date(entry.changed_at).toLocaleString()}
           ${entry.changed_by ? `<span style="color:var(--ink-soft)"> by ${userName(entry.changed_by)}</span>` : ""}
@@ -1585,13 +1590,20 @@ async function renderAuditSection(){
   if (auditFilters.task !== "all") query = query.eq("record_id", Number(auditFilters.task));
   if (auditFilters.user !== "all") query = query.eq("changed_by", Number(auditFilters.user));
 
-  const { data, error } = await query;
+  let commentQuery = supabaseClient.from("task_comments").select("*").order("created_at", { ascending: false }).limit(200);
+  if (auditFilters.task !== "all") commentQuery = commentQuery.eq("task_id", Number(auditFilters.task));
+  if (auditFilters.user !== "all") commentQuery = commentQuery.eq("author_id", Number(auditFilters.user));
+
+  const [{ data, error }, { data: commentData, error: commentError }] = await Promise.all([query, commentQuery]);
   if (error){
     emptyMsg.textContent = "Couldn't load audit trail: " + error.message;
     emptyMsg.style.display = "block";
     return;
   }
-  auditLogCache = data || [];
+  const commentEntries = (commentError ? [] : commentData || []).map(c => ({
+    changed_at: c.created_at, record_id: c.task_id, action: "COMMENT", changed_by: c.author_id, body: c.body,
+  }));
+  auditLogCache = [...(data || []), ...commentEntries].sort((a, b) => new Date(b.changed_at) - new Date(a.changed_at));
 
   // Assignment history is task-specific and should reflect the *whole* history
   // of that task regardless of the "Changed by" filter, so fetch it separately.
