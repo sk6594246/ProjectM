@@ -498,7 +498,7 @@
 
 <!-- ===================== USER EDIT MODAL ===================== -->
 <div class="modal-backdrop" id="user-modal-backdrop">
-  <div class="modal glass" style="width:380px;">
+  <div class="modal glass" style="width:420px;">
     <h2>Edit team member</h2>
     <input type="hidden" id="edit-user-id" />
     <label>Name</label>
@@ -507,6 +507,10 @@
     <select id="edit-user-role">
       <option>User</option><option>Manager</option><option>Admin</option>
     </select>
+    <div class="row2">
+      <div><label>Project(s) — hold Ctrl/Cmd to select multiple</label><select id="edit-user-project" multiple size="4"></select></div>
+      <div><label>Department(s) — filtered by project(s) above</label><select id="edit-user-department" multiple size="4"></select></div>
+    </div>
     <label>Reset PIN (leave blank to keep current, min 4 characters, letters &amp; numbers)</label>
     <input id="edit-user-pin" placeholder="New PIN" />
     <div class="modal-actions">
@@ -2022,6 +2026,23 @@ function renderDirectory(){
 }
 
 /* ---------- Team: edit / delete user ---------- */
+function refreshEditUserDeptOptions(preselectedDeptIds){
+  const projSel = document.getElementById("edit-user-project");
+  const deptSel = document.getElementById("edit-user-department");
+  const selectedProjectIds = Array.from(projSel.selectedOptions).map(o => Number(o.value));
+  let scoped = selectedProjectIds.length
+    ? state.departments.filter(d => d.project_id === null || selectedProjectIds.includes(d.project_id))
+    : state.departments;
+  if (!isAdmin()){
+    const myDepts = myDepartmentIds();
+    if (myDepts.length) scoped = scoped.filter(d => myDepts.includes(d.id));
+  }
+  deptSel.innerHTML = scoped.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  if (preselectedDeptIds){
+    Array.from(deptSel.options).forEach(o => { if (preselectedDeptIds.includes(Number(o.value))) o.selected = true; });
+  }
+}
+
 function openUserModal(userId){
   const u = state.users.find(u => u.id === userId);
   if (!u) return;
@@ -2029,6 +2050,17 @@ function openUserModal(userId){
   document.getElementById("edit-user-name").value = u.name;
   document.getElementById("edit-user-role").value = u.role;
   document.getElementById("edit-user-pin").value = "";
+
+  const currentProjectIds = state.userProjects.filter(up => up.user_id === userId).map(up => up.project_id);
+  const currentDeptIds = state.userDepartments.filter(ud => ud.user_id === userId).map(ud => ud.department_id);
+
+  const projSel = document.getElementById("edit-user-project");
+  const projectOptions = isAdmin() ? state.projects : state.projects.filter(p => myProjectIds().includes(p.id) || currentProjectIds.includes(p.id));
+  projSel.innerHTML = projectOptions.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+  Array.from(projSel.options).forEach(o => { if (currentProjectIds.includes(Number(o.value))) o.selected = true; });
+  projSel.onchange = () => refreshEditUserDeptOptions();
+  refreshEditUserDeptOptions(currentDeptIds);
+
   document.getElementById("user-modal-backdrop").classList.add("active");
 }
 function closeUserModal(){
@@ -2039,6 +2071,8 @@ async function saveUserEdit(){
   const name = document.getElementById("edit-user-name").value.trim();
   const role = document.getElementById("edit-user-role").value;
   const newPin = document.getElementById("edit-user-pin").value.trim();
+  const newProjectIds = Array.from(document.getElementById("edit-user-project").selectedOptions).map(o => Number(o.value));
+  const newDeptIds = Array.from(document.getElementById("edit-user-department").selectedOptions).map(o => Number(o.value));
   if (!name){ alert("Name is required."); return; }
   if (newPin && !isPinValid(newPin)){ alert("PIN must be at least 4 characters (letters/numbers)."); return; }
   if (!supabaseClient){ alert("Supabase isn't configured."); return; }
@@ -2050,6 +2084,23 @@ async function saveUserEdit(){
     const { error: pinError } = await supabaseClient.rpc("update_user_pin", { p_user_id: id, p_new_pin: newPin });
     if (pinError) alert("Name/role saved, but PIN reset failed: " + pinError.message);
   }
+
+  // reconcile project membership (add newly-checked, remove newly-unchecked)
+  const currentProjectIds = state.userProjects.filter(up => up.user_id === id).map(up => up.project_id);
+  const projectsToAdd = newProjectIds.filter(pid => !currentProjectIds.includes(pid));
+  const projectsToRemove = currentProjectIds.filter(pid => !newProjectIds.includes(pid));
+  if (projectsToAdd.length) await supabaseClient.from("user_projects").insert(projectsToAdd.map(pid => ({ user_id: id, project_id: pid })));
+  if (projectsToRemove.length) await supabaseClient.from("user_projects").delete().eq("user_id", id).in("project_id", projectsToRemove);
+
+  // reconcile department membership
+  const currentDeptIds = state.userDepartments.filter(ud => ud.user_id === id).map(ud => ud.department_id);
+  const deptsToAdd = newDeptIds.filter(did => !currentDeptIds.includes(did));
+  const deptsToRemove = currentDeptIds.filter(did => !newDeptIds.includes(did));
+  if (deptsToAdd.length) await supabaseClient.from("user_departments").insert(deptsToAdd.map(did => ({ user_id: id, department_id: did })));
+  if (deptsToRemove.length) await supabaseClient.from("user_departments").delete().eq("user_id", id).in("department_id", deptsToRemove);
+
+  state.userProjects = state.userProjects.filter(up => up.user_id !== id).concat(newProjectIds.map(pid => ({ user_id: id, project_id: pid })));
+  state.userDepartments = state.userDepartments.filter(ud => ud.user_id !== id).concat(newDeptIds.map(did => ({ user_id: id, department_id: did })));
 
   const local = state.users.find(u => u.id === id);
   if (local){ local.name = name; local.role = role; }
