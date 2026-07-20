@@ -233,6 +233,7 @@
       <label style="font-size:12px; color:var(--ink-soft);">Project:</label>
       <select id="project-filter" style="padding:6px 8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:12px;"></select>
       <span id="whoami"></span>
+      <button id="btn-refresh-data" onclick="refreshData()" title="Re-pull latest data from Supabase">⟳ Refresh data</button>
       <button onclick="logout()">Sign out</button>
     </div>
   </header>
@@ -241,7 +242,13 @@
     <!-- KANBAN -->
     <section class="view active" id="view-kanban">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
-        <div style="display:flex; gap:8px; align-items:center;">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <select id="kanban-project-filter" style="padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;">
+            <option value="all">All projects</option>
+          </select>
+          <select id="kanban-department-filter" style="padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;">
+            <option value="all">All departments</option>
+          </select>
           <select id="kanban-priority-filter" style="padding:8px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;">
             <option value="all">All priorities</option>
           </select>
@@ -1209,6 +1216,35 @@ function renderAll(){
   renderMobile();
 }
 
+/* ---------- Global "Refresh data" button (all screens) ---------- */
+async function refreshData(){
+  const btn = document.getElementById("btn-refresh-data");
+  if (!btn || btn.disabled) return;
+  const originalLabel = "⟳ Refresh data";
+  btn.disabled = true;
+  btn.textContent = "Refreshing...";
+
+  try {
+    await fetchAllReferenceData();
+    renderAll();
+    // also re-render whichever section-specific view is currently active
+    // (Manage / Audit Trail aren't covered by renderAll)
+    const activeView = document.querySelector("#tabs button.active")?.dataset.view;
+    if (activeView === "manage") renderManage();
+    if (activeView === "audit") renderAuditSection();
+
+    btn.textContent = "✓ Updated";
+  } catch (e){
+    console.error("refreshData failed:", e);
+    btn.textContent = "Refresh failed";
+  } finally {
+    setTimeout(() => {
+      btn.textContent = originalLabel;
+      btn.disabled = false;
+    }, 1200);
+  }
+}
+
 function statusName(id){ return state.statuses.find(s => s.id === id)?.name || "—"; }
 function statusColor(id){ return state.statuses.find(s => s.id === id)?.color || "#3d6cff"; }
 function hexToRgba(hex, alpha){
@@ -1229,6 +1265,8 @@ function renderKanban(){
   const board = document.getElementById("kanban-board");
   board.innerHTML = "";
   let filtered = visibleTasks();
+  if (kanbanFilters.project !== "all") filtered = filtered.filter(t => t.project_id === Number(kanbanFilters.project));
+  if (kanbanFilters.department !== "all") filtered = filtered.filter(t => t.department_id === Number(kanbanFilters.department));
   if (kanbanFilters.priority !== "all") filtered = filtered.filter(t => t.priority_id === Number(kanbanFilters.priority));
   if (kanbanFilters.assignedToMe) filtered = filtered.filter(t => t.assigned_to === state.currentUser?.id);
 
@@ -1252,7 +1290,7 @@ function renderKanban(){
   });
 }
 
-let kanbanFilters = { priority: "all", assignedToMe: false };
+let kanbanFilters = { project: "all", department: "all", priority: "all", assignedToMe: false };
 
 function toggleAssignedToMe(){
   kanbanFilters.assignedToMe = !kanbanFilters.assignedToMe;
@@ -1261,11 +1299,35 @@ function toggleAssignedToMe(){
 }
 
 function populateKanbanFilters(){
+  const projSel = document.getElementById("kanban-project-filter");
+  projSel.innerHTML = `<option value="all">All projects</option>` +
+    state.projects.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+  projSel.value = kanbanFilters.project;
+
+  const deptSel = document.getElementById("kanban-department-filter");
+  const scopedDepts = kanbanFilters.project === "all" ? state.departments : departmentsForProject(Number(kanbanFilters.project));
+  deptSel.innerHTML = `<option value="all">All departments</option>` +
+    scopedDepts.map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  // if the previously selected department fell out of scope after a project change, reset it
+  if (kanbanFilters.department !== "all" && !scopedDepts.some(d => d.id === Number(kanbanFilters.department))){
+    kanbanFilters.department = "all";
+  }
+  deptSel.value = kanbanFilters.department;
+
   const sel = document.getElementById("kanban-priority-filter");
   sel.innerHTML = `<option value="all">All priorities</option>` +
     state.priorities.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
   sel.value = kanbanFilters.priority;
 }
+document.getElementById("kanban-project-filter")?.addEventListener?.("change", (e) => {
+  kanbanFilters.project = e.target.value;
+  kanbanFilters.department = "all"; // department options are scoped to project, so reset
+  renderKanban();
+});
+document.getElementById("kanban-department-filter")?.addEventListener?.("change", (e) => {
+  kanbanFilters.department = e.target.value;
+  renderKanban();
+});
 document.getElementById("kanban-priority-filter")?.addEventListener?.("change", (e) => {
   kanbanFilters.priority = e.target.value;
   renderKanban();
@@ -1839,6 +1901,17 @@ function renderGantt(){
     <div style="position:absolute; left:calc(${labelWidth}px + (100% - ${labelWidth}px) * ${l.leftPct / 100}); top:-18px; font-size:10px; color:var(--ink-soft); transform:translateX(2px);">${l.label}</div>
   `).join("");
   gridWrap.style.marginTop = "18px"; // room for date labels above the first row
+
+  // ---- "today" marker ----
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (today >= minDate && today <= maxDate){
+    const todayLeftPct = ((today - minDate) / 86400000 / totalDays) * 100;
+    gridWrap.insertAdjacentHTML("beforeend", `
+      <div style="position:absolute; left:calc(${labelWidth}px + (100% - ${labelWidth}px) * ${todayLeftPct / 100}); top:-18px; bottom:0; width:2px; background:var(--danger); z-index:5;"></div>
+      <div style="position:absolute; left:calc(${labelWidth}px + (100% - ${labelWidth}px) * ${todayLeftPct / 100}); top:-32px; font-size:10px; font-weight:700; color:var(--danger); transform:translateX(4px); white-space:nowrap; z-index:5;">Today</div>
+    `);
+  }
 
   tasks.forEach(t => {
     const row = document.createElement("div");
