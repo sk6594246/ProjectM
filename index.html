@@ -305,6 +305,41 @@
     <!-- MOBILE / OVERVIEW -->
     <section class="view" id="view-mobile">
       <div class="grid-3" id="mobile-cards"></div>
+
+      <div class="panel glass" style="margin-top:14px;">
+        <h3>Cumulative task throughput (waterfall)</h3>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; margin-bottom:14px;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <label style="font-size:12px; color:var(--ink-soft); margin:0;">Bucket size</label>
+            <input type="number" id="waterfall-bucket-num" min="1" value="1" style="width:60px; padding:7px 8px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;" />
+            <select id="waterfall-bucket-unit" style="padding:7px 8px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;">
+              <option value="day">Day(s)</option>
+              <option value="week" selected>Week(s)</option>
+              <option value="month">Month(s)</option>
+              <option value="year">Year(s)</option>
+            </select>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <label style="font-size:12px; color:var(--ink-soft); margin:0;">Look back</label>
+            <input type="number" id="waterfall-lookback-num" min="1" value="3" style="width:60px; padding:7px 8px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;" />
+            <select id="waterfall-lookback-unit" style="padding:7px 8px; border-radius:8px; border:1px solid rgba(0,0,0,0.12); font-size:12px;">
+              <option value="day">Day(s)</option>
+              <option value="week">Week(s)</option>
+              <option value="month" selected>Month(s)</option>
+              <option value="year">Year(s)</option>
+            </select>
+          </div>
+          <button class="primary" style="width:auto;" onclick="renderWaterfallChart()">Apply</button>
+        </div>
+        <div id="waterfall-chart-wrap" style="overflow-x:auto;"></div>
+        <div class="gantt-legend" style="margin-top:10px;">
+          <span><span class="legend-dot" style="background:var(--ok)"></span>Net up (created &gt; completed that period)</span>
+          <span><span class="legend-dot" style="background:var(--danger)"></span>Net down (completed &gt; created that period)</span>
+        </div>
+        <p style="font-size:11px; color:var(--ink-soft); margin-top:8px;">
+          "Completed" = tasks currently in a status flagged "Counts as complete" (Manage &gt; Manage statuses), using each task's last-updated time as its completion date.
+        </p>
+      </div>
     </section>
 
     <!-- AUDIT TRAIL -->
@@ -861,6 +896,10 @@ function renderStatusList(){
     <div class="status-row">
       <input type="color" class="status-swatch" value="${s.color || '#3d6cff'}" onchange="updateStatusColor(${s.id}, this.value)" />
       <span class="status-name">${s.name}</span>
+      <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--ink-soft); cursor:pointer;" title="Tasks in this status count as 'completed' for throughput charts">
+        <input type="checkbox" ${s.counts_as_complete ? "checked" : ""} onchange="updateStatusCountsAsComplete(${s.id}, this.checked)" />
+        Counts as complete
+      </label>
       <span class="status-count">${state.tasks.filter(t => t.status_id === s.id).length} task(s)</span>
       <div class="sort-btns">
         <button onclick="moveStatus(${s.id}, -1)" ${idx === 0 ? "disabled" : ""} title="Move up">▲</button>
@@ -877,7 +916,7 @@ async function addStatus(){
   if (!name){ alert("Enter a status name."); return; }
   if (!supabaseClient){ alert("Supabase isn't configured."); return; }
   const sortOrder = state.statuses.length ? Math.max(...state.statuses.map(s => s.sort_order)) + 1 : 1;
-  const { data, error } = await supabaseClient.from("statuses").insert({ name, color, sort_order: sortOrder }).select().single();
+  const { data, error } = await supabaseClient.from("statuses").insert({ name, color, sort_order: sortOrder, counts_as_complete: false }).select().single();
   if (error){ alert("Couldn't add status: " + error.message); return; }
   state.statuses.push(data);
   saveCache();
@@ -895,6 +934,17 @@ async function updateStatusColor(statusId, color){
   if (supabaseClient){
     const { error } = await supabaseClient.from("statuses").update({ color }).eq("id", statusId);
     if (error) console.error("status color sync failed:", error);
+  }
+}
+
+async function updateStatusCountsAsComplete(statusId, checked){
+  const s = state.statuses.find(s => s.id === statusId);
+  if (!s) return;
+  s.counts_as_complete = checked;
+  saveCache();
+  if (supabaseClient){
+    const { error } = await supabaseClient.from("statuses").update({ counts_as_complete: checked }).eq("id", statusId);
+    if (error) console.error("status counts_as_complete sync failed:", error);
   }
 }
 
@@ -1998,6 +2048,120 @@ function renderMobile(){
     <div class="stat-card glass"><div class="num">${highPriorityOpen}</div><div class="label">High priority, open</div></div>
     <div class="stat-card glass"><div class="num">${state.departments.length}</div><div class="label">Departments</div></div>
     <div class="stat-card glass"><div class="num">${state.users.length}</div><div class="label">Team members</div></div>
+  `;
+  renderWaterfallChart();
+}
+
+/* ============================================================
+   OVERVIEW — cumulative throughput waterfall
+   Created bars add to the running total; Completed bars subtract.
+   Bucket size and look-back range are each an independent
+   number + unit (Day/Week/Month/Year) control.
+   ============================================================ */
+function addUnits(date, n, unit){
+  const d = new Date(date);
+  if (unit === "day") d.setDate(d.getDate() + n);
+  else if (unit === "week") d.setDate(d.getDate() + n * 7);
+  else if (unit === "month") d.setMonth(d.getMonth() + n);
+  else if (unit === "year") d.setFullYear(d.getFullYear() + n);
+  return d;
+}
+function unitLabel(unit, n){
+  const names = { day: "day", week: "week", month: "month", year: "year" };
+  return `${n} ${names[unit]}${n === 1 ? "" : "s"}`;
+}
+
+function renderWaterfallChart(){
+  const wrap = document.getElementById("waterfall-chart-wrap");
+  if (!wrap) return;
+
+  const bucketNum = Math.max(1, Number(document.getElementById("waterfall-bucket-num").value) || 1);
+  const bucketUnit = document.getElementById("waterfall-bucket-unit").value;
+  const lookbackNum = Math.max(1, Number(document.getElementById("waterfall-lookback-num").value) || 1);
+  const lookbackUnit = document.getElementById("waterfall-lookback-unit").value;
+
+  const completeStatusIds = new Set(state.statuses.filter(s => s.counts_as_complete).map(s => s.id));
+  const tasks = visibleTasks();
+
+  const now = new Date();
+  const rangeStart = addUnits(now, -lookbackNum, lookbackUnit);
+
+  // build bucket boundaries from rangeStart to now, stepping by bucket size
+  const buckets = [];
+  let cursor = new Date(rangeStart);
+  while (cursor < now){
+    const bucketEnd = addUnits(cursor, bucketNum, bucketUnit);
+    buckets.push({ start: new Date(cursor), end: bucketEnd > now ? now : bucketEnd });
+    cursor = bucketEnd;
+  }
+  if (!buckets.length){
+    wrap.innerHTML = `<p style="color:var(--ink-soft); font-size:12px;">No time range to display.</p>`;
+    return;
+  }
+
+  // classify each task's created + completed timestamps into buckets
+  const createdCounts = new Array(buckets.length).fill(0);
+  const completedCounts = new Array(buckets.length).fill(0);
+  tasks.forEach(t => {
+    const createdAt = t.created_at ? new Date(t.created_at) : null;
+    if (createdAt){
+      const idx = buckets.findIndex(b => createdAt >= b.start && createdAt < b.end);
+      if (idx > -1) createdCounts[idx]++;
+    }
+    if (completeStatusIds.has(t.status_id)){
+      // no dedicated "completed_at" column — use last-updated time as the
+      // best available proxy for when the task reached a complete status.
+      const completedAt = t.updated_at ? new Date(t.updated_at) : null;
+      if (completedAt){
+        const idx = buckets.findIndex(b => completedAt >= b.start && completedAt < b.end);
+        if (idx > -1) completedCounts[idx]++;
+      }
+    }
+  });
+
+  // running cumulative total across buckets (classic waterfall)
+  let running = 0;
+  const points = buckets.map((b, i) => {
+    const net = createdCounts[i] - completedCounts[i];
+    const from = running;
+    running += net;
+    return { label: b.start.toLocaleDateString(undefined, { month: "short", day: "numeric" }), from, to: running, net, created: createdCounts[i], completed: completedCounts[i] };
+  });
+
+  const maxVal = Math.max(1, ...points.map(p => Math.max(p.from, p.to)));
+  const minVal = Math.min(0, ...points.map(p => Math.min(p.from, p.to)));
+  const chartHeight = 220;
+  const barWidth = 34;
+  const gap = 14;
+  const chartWidth = Math.max(600, points.length * (barWidth + gap) + gap);
+  const scale = v => chartHeight - ((v - minVal) / (maxVal - minVal || 1)) * chartHeight;
+
+  const bars = points.map((p, i) => {
+    const x = gap + i * (barWidth + gap);
+    const yTop = scale(Math.max(p.from, p.to));
+    const yBottom = scale(Math.min(p.from, p.to));
+    const height = Math.max(1, yBottom - yTop);
+    const color = p.net >= 0 ? "var(--ok)" : "var(--danger)";
+    return `
+      <g>
+        <rect x="${x}" y="${yTop}" width="${barWidth}" height="${height}" rx="3" fill="${color}" opacity="0.85">
+          <title>${p.label}: +${p.created} created, -${p.completed} completed, running total ${p.to}</title>
+        </rect>
+        <text x="${x + barWidth / 2}" y="${chartHeight + 16}" font-size="9" text-anchor="middle" fill="var(--ink-soft)">${p.label}</text>
+        <text x="${x + barWidth / 2}" y="${scale(p.to) - (p.to >= p.from ? 6 : -14)}" font-size="9" text-anchor="middle" fill="var(--ink)">${p.to}</text>
+      </g>`;
+  }).join("");
+
+  const zeroY = scale(0);
+
+  wrap.innerHTML = `
+    <div style="font-size:11px; color:var(--ink-soft); margin-bottom:6px;">
+      Bucketed by ${unitLabel(bucketUnit, bucketNum)}, covering the last ${unitLabel(lookbackUnit, lookbackNum)}.
+    </div>
+    <svg width="${chartWidth}" height="${chartHeight + 30}" viewBox="0 0 ${chartWidth} ${chartHeight + 30}">
+      <line x1="0" y1="${zeroY}" x2="${chartWidth}" y2="${zeroY}" stroke="rgba(0,0,0,0.15)" stroke-dasharray="3,3" />
+      ${bars}
+    </svg>
   `;
 }
 
